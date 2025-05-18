@@ -1,0 +1,62 @@
+This Emacs package provides a client interface for =cscope=, a developer's tool for browsing C/C++ source code. It allows users to perform various cscope queries directly within Emacs and view the results in a dedicated buffer with features for easy navigation. This package provides a smooth integration by adhering to the traditional Emacs principle of a compilation or grep buffer.
+
+** Features
+- *Integrate Cscope searches within Emacs:* Perform cscope queries without leaving your editor.
+- *Automatic Database Generation:* If a =cscope.out= database is not found in the current project, the package can generate it automatically.
+- *Multiple Search Types:* Supports common cscope searches such as finding symbols, global definitions, called functions, calling functions, text strings, and files including a specific file.
+- *Dedicated Results Buffer:* Displays search results in a special =cscope-mode= buffer, derived from =compilation-mode=. The mode line displays the number of matches found.
+- *History of Queries:* Remembers symbols you've searched for.
+- *Project-Aware:* Manages cscope buffers based on project directories, integrating with Magit to find the project's top-level directory.
+- *Interactive Commands:* Provides interactive functions for each search type.
+** Installation
+1. Ensure =cscope.el= is placed in a directory included in your Emacs =load-path=.
+
+2. Add the following to your Emacs configuration file (e.g., =~/.emacs.d/init.el= or =~/.emacs=):
+
+   #+begin_src emacs-lisp
+   (require 'cscope)
+   #+end_src
+
+** Usage
+*** Generating the Cscope Database
+Before you can perform searches, a =cscope.out= database needs to exist in your project's root directory.
+If the package doesn't find an existing =cscope.out= when a query is initiated, it will attempt to generate one by:
+1. Creating a =cscope.files= file by finding all =*.[ch]= and =*.cpp= files in the current directory and its subdirectories. 
+2. Running =cscope -b -q= to build the database.
+
+Progress of the database generation will be shown in the echo area.
+*** Performing a Search
+You can initiate a cscope search using the generic =cscope-query= command or specific commands for each search type.
+
+- =M-x cscope-query=:
+  - Prompts for the "Type" of search (e.g., "find-this-symbol", "find-global-definition"). You can use completion for available types.
+  - Prompts for the "Symbol" to search for. It will suggest the symbol at the current point and provide history for previous searches.
+- *Specific search commands (examples):*
+  - =M-x cscope-find-this-symbol=
+  - =M-x cscope-find-global-definition=
+  - =M-x cscope-find-called-functions=
+  - =M-x cscope-find-functions-calling-this-function=
+  - =M-x cscope-find-this-text-string=
+  - =M-x cscope-find-files-including-file=
+
+  Each of these commands will prompt for the "Symbol" (or text string/file name as appropriate).
+*** Viewing Results
+Search results are displayed in a buffer named =*cscope:project-name*=. This buffer is in =cscope-mode=, which inherits from =compilation-mode=.
+
+- *Navigation:*
+  - Use =n= (=next-error=) to jump to the next match.
+  - Use =p= (=previous-error=) to jump to the previous match.
+  - Clicking on a match or pressing =RET= on a line will take you to the corresponding location in the source file.
+- *Mode Line:* The mode line in the results buffer will show the number of matches found (e.g., =[15]=) and the status of the cscope process (e.g., =:run=, =:exit=). If no matches are found, a message will be displayed in the echo area.
+
+** Available Search Types
+The following search types are supported (mapping cscope's internal numbers to descriptive names):
+
+| Number | Name                                 | Interactive Command                             | Description                                |
+|--------+--------------------------------------+-------------------------------------------------+--------------------------------------------|
+|      0 | =find-this-symbol=                     | =M-x cscope-find-this-symbol=                     | Find all references to a symbol.           |
+|      1 | =find-global-definition=               | =M-x cscope-find-global-definition=               | Find the global definition(s) of a symbol. |
+|      2 | =find-called-functions=                | =M-x cscope-find-called-functions=                | Find functions called by a given function. |
+|      3 | =find-functions-calling-this-function= | =M-x cscope-find-functions-calling-this-function= | Find functions that call a given function. |
+|      4 | =find-this-text-string=                | =M-x cscope-find-this-text-string=                | Find all occurrences of a text string.     |
+|      8 | =find-files-including-file=            | =M-x cscope-find-files-including-file=            | Find files that =#include= a specified file. |
