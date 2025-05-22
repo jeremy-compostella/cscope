@@ -23,7 +23,7 @@ This Emacs package provides a client interface for =cscope=, a developer's tool 
      (require 'cc-mode)
      (require 'dired)
      (require 'ld-script)
-     (dolist (mode '(c ld-script asm dired))
+     (dolist (mode '(cscope c ld-script asm dired))
        (let ((map (intern (concat (symbol-name mode) "-mode-map"))))
 	 (define-key (symbol-value map) (kbd "M-.") #'cscope-find-this-function-definition)
 	 (define-key (symbol-value map) (kbd "M-,") #'cscope-find-this-C-symbol)
