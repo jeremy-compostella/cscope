@@ -31,14 +31,17 @@
 (require 'magit)
 (require 'uniquify)
 
-(defconst cscope-mode-line-matches
-  `(" [" (:propertize (:eval (int-to-string cscope-num-matches-found))
-                      face ,grep-hit-face
-                      help-echo "Number of matches so far")
-    "]"))
+(defcustom cscope-show-function t
+  "Whether to show function name in results."
+  :type 'boolean)
 
-(defvar cscope-history '()
-  "History list for symbols queried by cscope search functions.")
+(defcustom cscope-fontify-code-line t
+  "Whether to apply syntax highlighting to code lines in results."
+  :type 'boolean)
+
+(defcustom cscope-highlight-match t
+  "When non-nil, highlights the matching symbols in search results."
+  :type 'boolean)
 
 (defcustom cscope-search-types
   '((0 "find-this-C-symbol" ",")
@@ -55,27 +58,48 @@
 names and documentation."
   :type 'alist)
 
-(defun cscope-type-title (type)
-  "Convert a cscope search type (a string with dashes) into a title.
-For example, 'find-this-symbol' becomes 'Find this symbol'."
+(defcustom cscope-display-options
+  '((truncate-lines "t")
+    (cscope-show-function "s")
+    (cscope-fontify-code-line "f")
+    (cscope-highlight-match "h"))
+  "Alist controlling display options in the cscope buffer.
+Each element is a list of the form (VARIABLE KEY), where:
+- VARIABLE is the symbol of the boolean variable controlling the option.
+- KEY is the character used to toggle the option in the transient menu."
+  :type 'alist)
+
+(defun cscope-symbol-title (symbol)
   (with-temp-buffer
     (save-excursion
-      (insert type))
+      (insert (if (symbolp symbol)
+		  (symbol-name symbol)
+		symbol)))
+    (save-excursion
+      (when (search-forward "cscope-" nil t)
+	(replace-match "")))
     (capitalize-word 1)
     (while (search-forward "-" nil t)
       (replace-match " "))
-    (buffer-string)))
+    (buffer-substring-no-properties (point-min) (point-max))))
 
-(defvar cscope-entry-actions
-   (let ((vec (make-vector (1+ (length cscope-search-types)) "Cscope Actions:")))
-     (let ((i 1))
-       (dolist (type cscope-search-types)
-	 (setf (aref vec i)
-	       (list (caddr type)
-		     (cscope-type-title (cadr type))
-		     (intern (concat "cscope-" (cadr type)))))
-	 (cl-incf i)))
-     vec))
+(defconst cscope-mode-line-matches
+  `(" [" (:propertize (:eval (int-to-string cscope-num-matches-found))
+		       face ,grep-hit-face
+		       help-echo "Number of matches so far")
+    " "
+    ,@(mapcar (lambda (option)
+		`(:eval
+		  (propertize ,(cadr option)
+			      'face (if ,(car option)
+					'compilation-mode-line-exit
+				      'compilation-error)
+			      'help-echo ,(cscope-symbol-title (car option)))))
+	      cscope-display-options)
+    "]"))
+
+(defvar cscope-history '()
+  "History list for symbols queried by cscope search functions.")
 
 (defvar-local cscope-process nil
   "Process object for the running cscope command.")
@@ -239,6 +263,21 @@ to the new output chunk for correct parsing."
 			   (setq-local cscope-leftover nil)))))
     (insert leftover)))
 
+(defun cscope-fontify (context)
+  (with-temp-buffer
+    (insert context)
+    (let ((c-mode-hook '()))
+      (c-mode))
+    (font-lock-ensure (point-min) (point-max))
+    (goto-char (point-min))
+    (let ((pos (point-min)))
+      (while (setf next (next-property-change pos))
+	(when-let ((face (get-text-property pos 'face)))
+	  (put-text-property pos next 'face nil)
+	  (put-text-property pos next 'font-lock-face face))
+	(setf pos next)))
+    (buffer-string)))
+
 (defun cscope-insert-result (buffer file function line context)
   "Insert a cscope search result into BUFFER.
 
@@ -255,16 +294,27 @@ Highlights the search symbol in the context."
     (let ((inhibit-read-only t))
       (save-excursion
         (goto-char (point-max))
-        (insert (format "%s:%s:" file line))
-        (let ((start (point)))
-          (insert (string-trim-left context) "\n")
-          (save-excursion
-            (goto-char start)
-            (when (search-forward (cdar cscope-searches) nil t)
-              (replace-match (propertize (match-string 0)
-                                         'face nil
-                                         'font-lock-face 'cscope-match)
-                             t t))))))))
+	(let ((fun (cond ((not cscope-show-function) "")
+			 ((string= function "<global>") "")
+			 ((string= function (cdar cscope-searches)) "")
+			 ((concat (propertize function 'face nil
+					      'font-lock-face
+					      'font-lock-function-name-face)
+				  ":")))))
+          (insert (format "%s:%s:%s" file line fun))
+          (let ((start (point))
+		(context (if cscope-fontify-code-line
+			     (cscope-fontify context)
+			   context)))
+            (insert (string-trim-left context) "\n")
+            (save-excursion
+              (goto-char start)
+	      (when cscope-highlight-match
+		(while (search-forward (cdar cscope-searches) nil t)
+		  (replace-match (propertize (match-string 0)
+                                             'face nil
+                                             'font-lock-face 'cscope-match)
+				 t t))))))))))
 
 (defun cscope-filter (process output)
   "Filter the output from the cscope process.
@@ -323,7 +373,7 @@ indicate the status of the search."
 Takes a SEARCH query, which is a cons cell (type . symbol), and
 generates a human-readable string describing the search."
   (format "%s: '%s'."
-	  (cscope-type-title
+	  (cscope-symbol-title
 	   (car (assoc-default (car search) cscope-search-types)))
 	  (cdr search)))
 
@@ -360,7 +410,7 @@ cscope buffer by clearing it and displaying the search query."
 		"Type: " (mapcar 'cadr cscope-search-types) nil t)))
   (unless thing
     (setf thing
-	  (cscope-read-string (concat (cscope-type-title type) ": "))))
+	  (cscope-read-string (concat (cscope-symbol-title type) ": "))))
   (when (stringp type)
     (setf type (car (cl-find type cscope-search-types
 			     :key #'cadr :test #'string=))))
@@ -395,9 +445,12 @@ to navigate the history."
 	(set out (push (car (symbol-value in)) (symbol-value out)))
 	(set in (cdr (symbol-value in)))
 	(cl-incf i)))
-    (when (= i (abs n))
-      (setq cscope-inhibit-automatic-open t)
-      (cscope-execute-query))))
+    (if (= i (abs n))
+	(progn
+	  (setq cscope-inhibit-automatic-open t)
+	  (cscope-execute-query))
+      (message (format "%s of search history."
+		       (if (< n 0) "End" "Beginning"))))))
 
 (defun cscope-next-query (&optional n)
   "Execute a subsequent cscope query from the history (undoing previous).
@@ -419,10 +472,58 @@ with a negated argument."
 	    (interactive)
 	    (cscope-query (cadr feature) nil)))))
 
+(dolist (option cscope-display-options)
+  (let* ((var (car option))
+	 (name (symbol-name var)))
+    (when (string-prefix-p "cscope-" name)
+      (fset (intern (concat "toggle-" name))
+	    (lexical-let ((var var)
+			  (name name))
+	      (lambda ()
+		(interactive)
+		(make-local-variable var)
+		(set var (not (symbol-value var)))
+		(cscope-execute-query)
+		(message (format "%s %s" (cscope-symbol-title var)
+				 (if (symbol-value var) "enabled." "disabled.")))))))))
+
+(defvar cscope-entry-actions
+   (let ((vec (make-vector (1+ (length cscope-search-types)) "Cscope Actions:")))
+     (let ((i 1))
+       (dolist (type cscope-search-types)
+	 (setf (aref vec i)
+	       (list (caddr type)
+		     (cscope-symbol-title (cadr type))
+		     (intern (concat "cscope-" (cadr type)))))
+	 (cl-incf i)))
+     vec)
+   "Defines cscope actions for the transient menu.
+
+The actions are built out of the `cscope-search-types'
+customizable variable.")
+
+(defvar cscope-toggle-actions
+  (let ((vec (make-vector (1+ (length cscope-display-options)) "Toggle:"))
+        (i 1))
+    (dolist (option cscope-display-options)
+      (let ((var (car option))
+            (key (cadr option)))
+        (setf (aref vec i)
+              (list (concat "t" key)  ; Prefix "t" for toggle action.
+                    (cscope-symbol-title var) ; Display the option title.
+                    (intern (concat "toggle-" (symbol-name var)))))) ; Command to toggle.
+      (cl-incf i))
+    vec)
+  "Defines display options used in the transient menu.
+
+The actions are built out of the `cscope-display-options'
+customizable variable.")
+
 (transient-define-prefix cscope-entry ()
   "Defines a transient menu cscope."
   ["Database"
    ("g" "Regenerate" cscope-generate-database)]
+  cscope-toggle-actions
   cscope-entry-actions
   (interactive)
   (transient-setup 'cscope-entry))
