@@ -378,6 +378,7 @@ generates a human-readable string describing the search."
 This function takes the most recent search query from `cscope-searches'
 and sends it to the running cscope process.  It first prepares the
 cscope buffer by clearing it and displaying the search query."
+  (interactive)
   (let ((search (car cscope-searches)))
     (let ((inhibit-read-only t))
       (erase-buffer)
@@ -550,7 +551,7 @@ customizable variable."
       (let ((var (cdr option))
             (key (car option)))
         (setf (aref vec i)
-              (list (concat "t" key)
+              (list key
                     (cscope-symbol-title var)
                     (intern (concat "toggle-" (symbol-name var))))))
       (cl-incf i))
@@ -574,6 +575,12 @@ customizable variable."
   (interactive)
   (transient-setup 'cscope-entry))
 
+(transient-define-prefix cscope-toggle ()
+  "Defines a transient menu to toggle cscope buffer display options."
+  ["Dummy"]
+  (interactive)
+  (transient-setup 'cscope-toggle))
+
 (defun cscope-goto-match ()
   "Navigate to the location of the current match.
 
@@ -590,7 +597,9 @@ after jumping to the error."
 
 (defvar cscope-mode-map (cl-copy-list grep-mode-map))
 (define-key cscope-mode-map (kbd "e") #'cscope-entry)
-(define-key cscope-mode-map (kbd "g") #'cscope-generate-database)
+(define-key cscope-mode-map (kbd "t") #'cscope-toggle)
+(define-key cscope-mode-map (kbd "g") #'cscope-execute-query)
+(define-key cscope-mode-map (kbd "G") #'cscope-generate-database)
 (define-key cscope-mode-map (kbd "P") #'cscope-previous-query)
 (define-key cscope-mode-map (kbd "N") #'cscope-next-query)
 (define-key cscope-mode-map (kbd "<return>") #'cscope-goto-match)
@@ -614,10 +623,10 @@ results. The mode line displays the number of matches found."
     (cscope-generate-search-functions)
     (cscope-generate-toggle-functions)
     (transient-remove-suffix 'cscope-entry '(1))
-    (transient-remove-suffix 'cscope-entry '(1))
     (transient-insert-suffix 'cscope-entry '(0)
       (cscope-generate-entry-actions))
-    (transient-insert-suffix 'cscope-entry '(0)
+    (transient-remove-suffix 'cscope-toggle '(1))
+    (transient-insert-suffix 'cscope-toggle '(0)
       (cscope-generate-toggle-actions))))
 
 (provide 'cscope)
