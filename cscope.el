@@ -577,11 +577,30 @@ customizable variable."
 			  'help-echo ,(cscope-symbol-title (cdr option)))))
 	  cscope-display-options))
 
+(defun cscope-switch-to-buffer ()
+  "Switch to a cscope buffer.
+
+This function lists all buffers currently in `cscope-mode` and
+prompts the user to select one. It uses `ido-mode` for completion
+if available, providing an interactive buffer-switching experience.
+
+When called, it switches to the selected buffer, allowing the
+user to quickly navigate between different cscope result buffers."
+  (interactive)
+  (let* ((buffers (mapcar 'buffer-name (cscope-buffers)))
+	 (prompt "Buffer: ")
+	 (buffer (if (and (boundp 'ido-mode) ido-mode)
+		     (ido-completing-read prompt buffers)
+		   (completing-read prompt buffers))))
+    (switch-to-buffer buffer)))
+
 (transient-define-prefix cscope-entry ()
   "Defines a transient menu cscope."
   ["Place holder"]
   ["Database"
    ("g" "Regenerate" cscope-generate-database)]
+  ["Buffer(s)"
+   ("b" "Switch to a buffer" cscope-switch-to-buffer)]
   (interactive)
   (transient-setup 'cscope-entry))
 
