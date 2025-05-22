@@ -249,6 +249,7 @@ to the new output chunk for correct parsing."
     (insert leftover)))
 
 (defun cscope-fontify (context)
+  "Apply syntax highlighting to CONTEXT string."
   (with-temp-buffer
     (insert context)
     (let ((c-mode-hook '()))
