@@ -24,9 +24,9 @@
 
 ;;; Commentary:
 
-(eval-when-compile
-  (require 'cl-lib)
-  (require 'cl-seq))
+(require 'cl)
+(require 'cl-lib)
+(require 'cl-seq)
 (require 'grep)
 (require 'magit)
 (require 'uniquify)
