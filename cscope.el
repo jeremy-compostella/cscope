@@ -576,6 +576,7 @@ customizable variable."
 
 (transient-define-prefix cscope-entry ()
   "Defines a transient menu cscope."
+  ["Place holder"]
   ["Database"
    ("g" "Regenerate" cscope-generate-database)]
   (interactive)
@@ -583,7 +584,7 @@ customizable variable."
 
 (transient-define-prefix cscope-toggle ()
   "Defines a transient menu to toggle cscope buffer display options."
-  ["Dummy"]
+  ["Place holder"]
   (interactive)
   (transient-setup 'cscope-toggle))
 
@@ -628,11 +629,9 @@ results. The mode line displays the number of matches found."
 		compilation-mode-line-errors mode-line)
     (cscope-generate-search-functions)
     (cscope-generate-toggle-functions)
-    (transient-remove-suffix 'cscope-entry '(1))
-    (transient-insert-suffix 'cscope-entry '(0)
+    (transient-replace-suffix 'cscope-entry '(0)
       (cscope-generate-entry-actions))
-    (transient-remove-suffix 'cscope-toggle '(1))
-    (transient-insert-suffix 'cscope-toggle '(0)
+    (transient-replace-suffix 'cscope-toggle '(0)
       (cscope-generate-toggle-actions))))
 
 (provide 'cscope)
