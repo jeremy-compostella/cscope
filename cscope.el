@@ -83,21 +83,6 @@ Each element is a list of the form (VARIABLE KEY), where:
       (replace-match " "))
     (buffer-substring-no-properties (point-min) (point-max))))
 
-(defconst cscope-mode-line-matches
-  `(" [" (:propertize (:eval (int-to-string cscope-num-matches-found))
-		       face ,grep-hit-face
-		       help-echo "Number of matches so far")
-    " "
-    ,@(mapcar (lambda (option)
-		`(:eval
-		  (propertize ,(cadr option)
-			      'face (if ,(car option)
-					'compilation-mode-line-exit
-				      'compilation-error)
-			      'help-echo ,(cscope-symbol-title (car option)))))
-	      cscope-display-options)
-    "]"))
-
 (defvar cscope-history '()
   "History list for symbols queried by cscope search functions.")
 
@@ -465,31 +450,49 @@ with a negated argument."
   (let ((n (or n 1)))
     (cscope-previous-query (* -1 n))))
 
-(dolist (feature cscope-search-types)
-  (fset (intern (concat "cscope-" (cadr feature)))
-	(let ((feature feature))
-	  (lambda ()
-	    (interactive)
-	    (cscope-query (cadr feature) nil)))))
+(defun cscope-generate-search-functions ()
+  "Create interactive search functions from `cscope-search-types'.
 
-(dolist (option cscope-display-options)
-  (let* ((var (car option))
-	 (name (symbol-name var)))
-    (when (string-prefix-p "cscope-" name)
-      (fset (intern (concat "toggle-" name))
-	    (lexical-let ((var var)
-			  (name name))
-	      (lambda ()
-		(interactive)
-		(make-local-variable var)
-		(set var (not (symbol-value var)))
-		(cscope-execute-query)
-		(message (format "%s %s" (cscope-symbol-title var)
-				 (if (symbol-value var)
-				     "enabled."
-				   "disabled.")))))))))
+For each search type, this function creates a corresponding
+interactive function that initiates a cscope query. The function
+name is constructed by prefixing 'cscope-' to the search type
+name, allowing users to easily call these search functions via
+Emacs commands."
+  (dolist (feature cscope-search-types)
+    (let ((function-name (concat "cscope-" (cadr feature))))
+      (fset (intern function-name)
+            (lambda ()
+              (interactive)
+              (cscope-query (cadr feature) nil))))))
 
-(defvar cscope-entry-actions
+(defun cscope-create-toggle-functions ()
+  "Create interactive toggle functions from `cscope-display-options'.
+
+The function name is constructed by prefixing 'toggle-' to the
+option's variable name, allowing users to toggle these display
+options on or off within the cscope interface."
+  (dolist (option cscope-display-options)
+    (let* ((var (car option))
+	   (name (symbol-name var)))
+      (when (string-prefix-p "cscope-" name)
+	(fset (intern (concat "toggle-" name))
+	      (lexical-let ((var var)
+			    (name name))
+		(lambda ()
+		  (interactive)
+		  (make-local-variable var)
+		  (set var (not (symbol-value var)))
+		  (cscope-execute-query)
+		  (message (format "%s %s" (cscope-symbol-title var)
+				   (if (symbol-value var)
+				       "enabled."
+				     "disabled."))))))))))
+
+(defun cscope-generate-entry-actions ()
+    "Create cscope actions for the `cscope-entry' menu.
+
+The actions are built out of the `cscope-search-types'
+customizable variable."
   (let ((vec (make-vector (1+ (length cscope-search-types)) "Cscope Actions:")))
     (let ((i 1))
       (dolist (type cscope-search-types)
@@ -498,13 +501,13 @@ with a negated argument."
 		    (cscope-symbol-title (cadr type))
 		    (intern (concat "cscope-" (cadr type)))))
 	(cl-incf i)))
-    vec)
-  "Defines cscope actions for the transient menu.
+    vec))
 
-The actions are built out of the `cscope-search-types'
-customizable variable.")
+(defun cscope-generate-toggle-actions ()
+  "Create display toggle actions for the `cscope-entry' menu.
 
-(defvar cscope-toggle-actions
+The actions are built out of the `cscope-display-options'
+customizable variable."
   (let ((vec (make-vector (1+ (length cscope-display-options)) "Toggle:"))
         (i 1))
     (dolist (option cscope-display-options)
@@ -515,18 +518,23 @@ customizable variable.")
                     (cscope-symbol-title var)
                     (intern (concat "toggle-" (symbol-name var))))))
       (cl-incf i))
-    vec)
-  "Defines display options used in the transient menu.
+    vec))
 
-The actions are built out of the `cscope-display-options'
-customizable variable.")
+(defun cscope-generate-toggle-mode-line ()
+  "Create the mode line entries for cscope display options."
+  (mapcar (lambda (option)
+	    `(:eval
+	      (propertize ,(cadr option)
+			  'face (if ,(car option)
+ 				    'compilation-mode-line-exit
+				  'compilation-error)
+			  'help-echo ,(cscope-symbol-title (car option)))))
+	  cscope-display-options))
 
 (transient-define-prefix cscope-entry ()
   "Defines a transient menu cscope."
   ["Database"
    ("g" "Regenerate" cscope-generate-database)]
-  cscope-toggle-actions
-  cscope-entry-actions
   (interactive)
   (transient-setup 'cscope-entry))
 
@@ -559,8 +567,21 @@ after jumping to the error."
 This mode is derived from `compilation-mode', providing features
 like `next-error' and `previous-error' to navigate through search
 results. The mode line displays the number of matches found."
-  (setq-local compilation-error-regexp-alist grep-regexp-alist
-	      compilation-error-face grep-hit-face
-	      compilation-mode-line-errors cscope-mode-line-matches))
+  (let ((mode-line `(" [" (:propertize
+			   (:eval (int-to-string cscope-num-matches-found))
+			   face ,grep-hit-face
+			   help-echo "Number of matches so far")
+		     " " ,@(cscope-generate-toggle-mode-line) "]")))
+    (setq-local compilation-error-regexp-alist grep-regexp-alist
+		compilation-error-face grep-hit-face
+		compilation-mode-line-errors mode-line)
+    (cscope-generate-search-functions)
+    (cscope-generate-toggle-functions)
+    (transient-remove-suffix 'cscope-entry '(1))
+    (transient-remove-suffix 'cscope-entry '(1))
+    (transient-insert-suffix 'cscope-entry '(0)
+      (cscope-generate-entry-actions))
+    (transient-insert-suffix 'cscope-entry '(0)
+      (cscope-generate-toggle-actions))))
 
 (provide 'cscope)
