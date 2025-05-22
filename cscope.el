@@ -92,6 +92,12 @@ Each element is a cons cell `(type . symbol)`.")
 (defvar-local cscope-num-matches-found 0
   "Number of matches found so far in this buffer for the current search.")
 
+(defvar-local cscope-inhibit-automatic-open nil
+  "A flag to inhibit automatic opening of the first match.
+If non-nil, prevents `cscope-filter' from automatically jumping
+to the first match when a cscope query returns a single result.
+This is useful when browsing and executing queries.")
+
 (defun cscope-start-process ()
   "Start the cscope process in line-oriented mode.
 Uses the database file 'cscope.out' in the current default directory.
@@ -302,12 +308,14 @@ indicate the status of the search."
                     compilation-mode-line-errors)))
 	  (if (= cscope-num-matches-found 0)
 	      (message "No match found for '%s'." (cdar cscope-searches))
-	    (if (= cscope-num-matches-found 1)
+	    (if (and (not cscope-inhibit-automatic-open)
+		     (= cscope-num-matches-found 1))
 		(let ((next-error-found-function #'next-error-quit-window)
 		      (current-prefix-arg 0))
 		  (next-error))
 	      (select-window (get-buffer-window (current-buffer)))
-	      (goto-line 3))))))))
+	      (goto-line 3))
+	    (setq cscope-inhibit-automatic-open nil)))))))
 
 (defun cscope-search-message (search)
   "Format a search query for display.
@@ -387,6 +395,7 @@ to navigate the history."
 	(set in (cdr (symbol-value in)))
 	(cl-incf i)))
     (when (= i (abs n))
+      (setq cscope-inhibit-automatic-open t)
       (cscope-execute-query))))
 
 (defun cscope-next-query (&optional n)
