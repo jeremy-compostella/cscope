@@ -412,6 +412,9 @@ cscope buffer by clearing it and displaying the search query."
   (when (stringp type)
     (setf type (car (cl-find type cscope-search-types
 			     :key #'cadr :test #'string=))))
+  (when (eq (cscope-find-buffer default-directory)
+	    (current-buffer))
+      (setq cscope-inhibit-automatic-open t))
   (with-current-buffer (cscope-find-buffer default-directory)
     (let ((search (cons type thing)))
       (setq cscope-searches (delete search cscope-searches)
