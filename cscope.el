@@ -509,9 +509,9 @@ customizable variable.")
       (let ((var (car option))
             (key (cadr option)))
         (setf (aref vec i)
-              (list (concat "t" key)  ; Prefix "t" for toggle action.
-                    (cscope-symbol-title var) ; Display the option title.
-                    (intern (concat "toggle-" (symbol-name var)))))) ; Command to toggle.
+              (list (concat "t" key)
+                    (cscope-symbol-title var)
+                    (intern (concat "toggle-" (symbol-name var))))))
       (cl-incf i))
     vec)
   "Defines display options used in the transient menu.
