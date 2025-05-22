@@ -29,6 +29,7 @@
   (require 'cl-seq))
 (require 'grep)
 (require 'magit)
+(require 'uniquify)
 
 (defconst cscope-mode-line-matches
   `(" [" (:propertize (:eval (int-to-string cscope-num-matches-found))
@@ -53,6 +54,17 @@
   "Alist mapping cscope search type numbers to their descriptive
 names and documentation."
   :type 'alist)
+
+(defun cscope-type-title (type)
+  "Convert a cscope search type (a string with dashes) into a title.
+For example, 'find-this-symbol' becomes 'Find this symbol'."
+  (with-temp-buffer
+    (save-excursion
+      (insert type))
+    (capitalize-word 1)
+    (while (search-forward "-" nil t)
+      (replace-match " "))
+    (buffer-string)))
 
 (defvar cscope-entry-actions
    (let ((vec (make-vector (1+ (length cscope-search-types)) "Cscope Actions:")))
@@ -120,14 +132,11 @@ STRING is the output from the process."
 (defun cscope-generate-database-command ()
   "Generate the command string to create the cscope database.
 
-This function checks for the presence of a specific header file,
-'include/linux/linux_logo.h', to determine if this is a Linux
-kernel repository that provides a cscope make target. Otherwise,
-a find command is used to create the list of files before running
-cscope."
-  (if (file-readable-p "include/linux/linux_logo.h")
+If any root directory Makefile contains a reference to cscope, it
+assumes there is a cscope make target."
+  (if (= (shell-command "grep cscope Makefile*") 0)
       "make cscope"
-    (let ((files "find . \\( -name '*.[ch]' -o -name '*.cpp' \\) > cscope.files")
+    (let ((files "find . \\( -name '*.[chsS]' -o -name '*.cpp' \\) > cscope.files")
 	  (database "cscope -b -q"))
       (concat files "&&" database))))
 
@@ -167,8 +176,10 @@ The buffer name is based on the non-directory part of DIR,
 prefixed with '*cscope:' and suffixed with '*'."
   (when (string= (substring dir -1)  "/")
     (setf dir (substring dir 0 -1)))
-  (let ((buffer (generate-new-buffer
-		 (format "*cscope:%s*" (file-name-nondirectory dir)))))
+  (let* ((directory (file-name-nondirectory (directory-file-name dir)))
+	 (buf-name (format "cscope: %s" directory))
+	 (buffer (generate-new-buffer buf-name)))
+    (uniquify-rationalize-file-buffer-names buf-name directory buffer)
     (with-current-buffer buffer
       (setq default-directory dir
             buffer-read-only nil)
@@ -231,6 +242,8 @@ If this is the second match found, displays the buffer.
 Highlights the search symbol in the context."
   (with-current-buffer buffer
     (cl-incf cscope-num-matches-found)
+    (when (= cscope-num-matches-found 1)
+      (setq next-error-last-buffer buffer))
     (when (= cscope-num-matches-found 2)
       (display-buffer (current-buffer)))
     (let ((inhibit-read-only t))
@@ -289,20 +302,12 @@ indicate the status of the search."
                     compilation-mode-line-errors)))
 	  (if (= cscope-num-matches-found 0)
 	      (message "No match found for '%s'." (cdar cscope-searches))
-	    (goto-line 3)
-	    (when (= cscope-num-matches-found 1)
-	      (next-error))))))))
-
-(defun cscope-type-title (type)
-  "Convert a cscope search type (a string with dashes) into a title.
-For example, 'find-this-symbol' becomes 'Find this symbol'."
-  (with-temp-buffer
-    (save-excursion
-      (insert type))
-    (capitalize-word 1)
-    (while (search-forward "-" nil t)
-      (replace-match " "))
-    (buffer-string)))
+	    (if (= cscope-num-matches-found 1)
+		(let ((next-error-found-function #'next-error-quit-window)
+		      (current-prefix-arg 0))
+		  (next-error))
+	      (select-window (get-buffer-window (current-buffer)))
+	      (goto-line 3))))))))
 
 (defun cscope-search-message (search)
   "Format a search query for display.
@@ -336,7 +341,7 @@ cscope buffer by clearing it and displaying the search query."
 			(buffer-substring-no-properties (region-beginning)
 							(region-end)))
 		       ((thing-at-point 'symbol)))))
-    (read-string type initial 'cscope-history)))
+    (read-string prompt initial 'cscope-history)))
 
 (defun cscope-query (&optional type thing)
   "Initiate a cscope search of TYPE for THING."
@@ -399,18 +404,10 @@ with a negated argument."
 
 (dolist (feature cscope-search-types)
   (fset (intern (concat "cscope-" (cadr feature)))
-	(lexical-let ((feature feature))
-	  (lambda (symbol)
-	    (interactive
-	     (list (read-string "Symbol: " (current-word)
-				'cscope-history)))
-	    (cscope-query (car feature) symbol)))))
-
-(defvar cscope-mode-map (cl-copy-list grep-mode-map))
-(define-key cscope-mode-map (kbd "e") #'cscope-entry)
-(define-key cscope-mode-map (kbd "g") #'cscope-generate-database)
-(define-key cscope-mode-map (kbd "P") #'cscope-previous-query)
-(define-key cscope-mode-map (kbd "N") #'cscope-next-query)
+	(let ((feature feature))
+	  (lambda ()
+	    (interactive)
+	    (cscope-query (cadr feature) nil)))))
 
 (transient-define-prefix cscope-entry ()
   "Defines a transient menu cscope."
@@ -419,6 +416,27 @@ with a negated argument."
   cscope-entry-actions
   (interactive)
   (transient-setup 'cscope-entry))
+
+(defun cscope-goto-match ()
+  "Navigate to the location of the current match.
+
+This function uses `compile-goto-error' to jump to the source
+location corresponding to the current error highlighted in the
+cscope results buffer. It temporarily sets
+`next-error-found-function' to `next-error-quit-window` and
+`current-prefix-arg' to 0 to ensure the cscope buffer is closed
+after jumping to the error."
+  (interactive)
+  (let ((next-error-found-function #'next-error-quit-window)
+	(current-prefix-arg 0))
+    (compile-goto-error)))
+
+(defvar cscope-mode-map (cl-copy-list grep-mode-map))
+(define-key cscope-mode-map (kbd "e") #'cscope-entry)
+(define-key cscope-mode-map (kbd "g") #'cscope-generate-database)
+(define-key cscope-mode-map (kbd "P") #'cscope-previous-query)
+(define-key cscope-mode-map (kbd "N") #'cscope-next-query)
+(define-key cscope-mode-map (kbd "<return>") #'cscope-goto-match)
 
 ;;;###autoload
 (define-compilation-mode cscope-mode "Cscope"
