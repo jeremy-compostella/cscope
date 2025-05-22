@@ -263,7 +263,7 @@ Highlights the search symbol in the context."
             (when (search-forward (cdar cscope-searches) nil t)
               (replace-match (propertize (match-string 0)
                                          'face nil
-                                         'font-lock-face 'match)
+                                         'font-lock-face 'cscope-match)
                              t t))))))))
 
 (defun cscope-filter (process output)
@@ -446,6 +446,7 @@ after jumping to the error."
 (define-key cscope-mode-map (kbd "P") #'cscope-previous-query)
 (define-key cscope-mode-map (kbd "N") #'cscope-next-query)
 (define-key cscope-mode-map (kbd "<return>") #'cscope-goto-match)
+(copy-face 'match 'cscope-match)
 
 ;;;###autoload
 (define-compilation-mode cscope-mode "Cscope"
