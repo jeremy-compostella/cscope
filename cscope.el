@@ -40,15 +40,30 @@
   "History list for symbols queried by cscope search functions.")
 
 (defcustom cscope-search-types
-  '((0 . "find-this-symbol")
-    (1 . "find-global-definition")
-    (2 . "find-called-functions")
-    (3 . "find-functions-calling-this-function")
-    (4 . "find-this-text-string")
-    (8 . "find-files-including-file"))
+  '((0 "find-this-C-symbol" ",")
+    (1 "find-this-function-definition" ".")
+    (2 "Find-functions-called-by-this-function" "c")
+    (3 "find-functions-calling-this-function" "C")
+    (4 "find-this-text-string" "s")
+    (5 "change-this-text-string" "S")
+    (6 "find-this-egrep-pattern" "e")
+    (7 "find-this-file" "f")
+    (8 "find-files-including-file" "i")
+    (9 "find-assignments-to-this-symbol" "a"))
   "Alist mapping cscope search type numbers to their descriptive
 names and documentation."
   :type 'alist)
+
+(defvar cscope-entry-actions
+   (let ((vec (make-vector (1+ (length cscope-search-types)) "Cscope Actions:")))
+     (let ((i 1))
+       (dolist (type cscope-search-types)
+	 (setf (aref vec i)
+	       (list (caddr type)
+		     (cscope-type-title (cadr type))
+		     (intern (concat "cscope-" (cadr type)))))
+	 (cl-incf i)))
+     vec))
 
 (defvar-local cscope-process nil
   "Process object for the running cscope command.")
@@ -294,7 +309,8 @@ For example, 'find-this-symbol' becomes 'Find this symbol'."
 Takes a SEARCH query, which is a cons cell `(type . symbol)`, and
 generates a human-readable string describing the search."
   (format "%s: '%s'."
-	  (cscope-type-title (assoc-default (car search) cscope-search-types))
+	  (cscope-type-title
+	   (car (assoc-default (car search) cscope-search-types)))
 	  (cdr search)))
 
 (defun cscope-execute-query ()
@@ -327,12 +343,13 @@ cscope buffer by clearing it and displaying the search query."
   (interactive)
   (unless type
     (setf type (completing-read
-		"Type: " (mapcar 'cdr cscope-search-types) nil t)))
+		"Type: " (mapcar 'cadr cscope-search-types) nil t)))
   (unless thing
     (setf thing
 	  (cscope-read-string (concat (cscope-type-title type) ": "))))
   (when (stringp type)
-    (setf type (car (rassoc type cscope-search-types))))
+    (setf type (car (cl-find type cscope-search-types
+			     :key #'cadr :test #'string=))))
   (with-current-buffer (cscope-find-buffer default-directory)
     (let ((search (cons type thing)))
       (setq cscope-searches (delete search cscope-searches)
@@ -381,7 +398,7 @@ with a negated argument."
     (cscope-previous-query (* -1 n))))
 
 (dolist (feature cscope-search-types)
-  (fset (intern (concat "cscope-" (cdr feature)))
+  (fset (intern (concat "cscope-" (cadr feature)))
 	(lexical-let ((feature feature))
 	  (lambda (symbol)
 	    (interactive
@@ -389,7 +406,19 @@ with a negated argument."
 				'cscope-history)))
 	    (cscope-query (car feature) symbol)))))
 
-(defvar cscope-mode-map grep-mode-map)
+(defvar cscope-mode-map (cl-copy-list grep-mode-map))
+(define-key cscope-mode-map (kbd "e") #'cscope-entry)
+(define-key cscope-mode-map (kbd "g") #'cscope-generate-database)
+(define-key cscope-mode-map (kbd "P") #'cscope-previous-query)
+(define-key cscope-mode-map (kbd "N") #'cscope-next-query)
+
+(transient-define-prefix cscope-entry ()
+  "Defines a transient menu cscope."
+  ["Database"
+   ("g" "Regenerate" cscope-generate-database)]
+  cscope-entry-actions
+  (interactive)
+  (transient-setup 'cscope-entry))
 
 ;;;###autoload
 (define-compilation-mode cscope-mode "Cscope"
