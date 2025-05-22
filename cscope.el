@@ -82,7 +82,7 @@ For example, 'find-this-symbol' becomes 'Find this symbol'."
 
 (defvar-local cscope-searches nil
   "A list of previous searches performed in this buffer.
-Each element is a cons cell `(type . symbol)`.")
+Each element is a cons cell (type . symbol).")
 
 (defvar-local cscope-searches-backup nil)
 
@@ -319,7 +319,7 @@ indicate the status of the search."
 
 (defun cscope-search-message (search)
   "Format a search query for display.
-Takes a SEARCH query, which is a cons cell `(type . symbol)`, and
+Takes a SEARCH query, which is a cons cell (type . symbol), and
 generates a human-readable string describing the search."
   (format "%s: '%s'."
 	  (cscope-type-title
@@ -432,7 +432,7 @@ with a negated argument."
 This function uses `compile-goto-error' to jump to the source
 location corresponding to the current error highlighted in the
 cscope results buffer. It temporarily sets
-`next-error-found-function' to `next-error-quit-window` and
+`next-error-found-function' to `next-error-quit-window' and
 `current-prefix-arg' to 0 to ensure the cscope buffer is closed
 after jumping to the error."
   (interactive)
@@ -451,8 +451,8 @@ after jumping to the error."
 (define-compilation-mode cscope-mode "Cscope"
   "Major mode for displaying cscope search results.
 
-This mode is derived from `compilation-mode`, providing features
-like `next-error` and `previous-error` to navigate through search
+This mode is derived from `compilation-mode', providing features
+like `next-error' and `previous-error' to navigate through search
 results. The mode line displays the number of matches found."
   (setq-local compilation-error-regexp-alist grep-regexp-alist
 	      compilation-error-face grep-hit-face
