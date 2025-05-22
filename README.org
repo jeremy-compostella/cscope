@@ -56,3 +56,4 @@ This Emacs package provides a client interface for =cscope=, a developer's tool 
    - Use =C-o= to display the current match.
    - Use =RET= to jump to the current match.
    - Use =P= or =N= to execute the previous or the next search in the cscope buffer history.
+   - Use =e= to show the transient menu, which includes all the cscope search options but also some result display options.
