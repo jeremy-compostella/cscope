@@ -300,6 +300,7 @@ Highlights the search symbol in the context."
       (save-excursion
         (goto-char (point-max))
 	(let ((fun (cond ((string= function "<global>") "")
+			 ((string= function "<unknown>"))
 			 ((string= function (cdar cscope-searches)) "")
 			 ((propertize
 			   (concat (propertize function 'face nil
