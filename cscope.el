@@ -504,7 +504,7 @@ customizable variable."
 	(cl-incf i)))
     vec))
 
-(defun cscope-generate-toggle-actions ()
+(defun cscope-generate-toggle-functions ()
   "Create display toggle actions for the `cscope-entry' menu.
 
 The actions are built out of the `cscope-display-options'
