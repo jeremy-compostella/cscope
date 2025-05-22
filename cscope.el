@@ -102,6 +102,20 @@ STRING is the output from the process."
       (when cscope-searches
 	(cscope-execute-query)))))
 
+(defun cscope-generate-database-command ()
+  "Generate the command string to create the cscope database.
+
+This function checks for the presence of a specific header file,
+'include/linux/linux_logo.h', to determine if this is a Linux
+kernel repository that provides a cscope make target. Otherwise,
+a find command is used to create the list of files before running
+cscope."
+  (if (file-readable-p "include/linux/linux_logo.h")
+      "make cscope"
+    (let ((files "find . \\( -name '*.[ch]' -o -name '*.cpp' \\) > cscope.files")
+	  (database "cscope -b -q"))
+      (concat files "&&" database))))
+
 (defun cscope-generate-database ()
   "Generate the cscope database in the current directory.
 This function creates a 'cscope.files' file containing a list of C,
@@ -113,16 +127,15 @@ The process is run asynchronously using `start-file-process-shell-command'.
 A `progress-reporter' is used to show the generation status in the echo area.
 The `cscope-database-sentinel' function is set as the process sentinel
 to handle completion."
-  (let* ((files "find . \\( -name '*.[ch]' -o -name '*.cpp' \\) > cscope.files")
-	 (database "cscope -b -q")
-	 (process (start-file-process-shell-command
-		   "cscope" (current-buffer) (concat files "&&" database)))
+  (interactive)
+  (let* ((process (start-file-process-shell-command
+		   "cscope" (current-buffer) (cscope-generate-database-command)))
 	 (progress (make-progress-reporter
-		    (format "Missing cscope database in %s, generating..."
+		    (format "Generating cscsope database for %s..."
 			    default-directory)))
 	 (timer-func (lexical-let ((progress progress))
 		       (apply-partially #'progress-reporter-update progress)))
-	 (timer (run-at-time .5 .5 timer-func)))
+	 (timer (run-at-time .5 2 timer-func)))
     (set-process-sentinel
      process (apply-partially #'cscope-database-sentinel progress timer))))
 
@@ -139,7 +152,26 @@ The buffer name is based on the non-directory part of DIR,
 prefixed with '*cscope:' and suffixed with '*'."
   (when (string= (substring dir -1)  "/")
     (setf dir (substring dir 0 -1)))
-  (generate-new-buffer (format "*cscope:%s*" (file-name-nondirectory dir))))
+  (let ((buffer (generate-new-buffer
+		 (format "*cscope:%s*" (file-name-nondirectory dir)))))
+    (with-current-buffer buffer
+      (setq default-directory dir
+            buffer-read-only nil)
+      (cscope-mode)
+      (current-buffer))))
+
+(defun cscope-top-level (dir)
+  "Determine the top-level directory for cscope operations for DIR."
+  (cond ((magit-toplevel))
+	((let ((top-level)
+	       (current dir))
+	   (while (and current (not top-level))
+	     (let ((default-directory current))
+	       (when (file-readable-p "cscope.out")
+		 (setf top-level current)))
+	     (setf current (file-name-parent-directory current)))
+	   top-level))
+	(dir)))
 
 (defun cscope-find-buffer (dir)
   "Find or create a cscope buffer for the given directory DIR.
@@ -147,17 +179,12 @@ Returns an existing `cscope-mode' buffer if its `default-directory'
 is a prefix of DIR. Otherwise, creates a new `cscope-mode' buffer
 with its `default-directory' set to the project's top-level directory
 (if using git) or DIR, and returns it."
-  (or (cl-find dir (cscope-buffers)
+  (or (cl-find (expand-file-name dir) (cscope-buffers)
                :key (lambda (b)
                       (with-current-buffer b default-directory))
-               :test (lambda (buf-dir req-dir)
-		       (string-prefix-p buf-dir req-dir)))
-      (let ((toplevel (or (magit-toplevel) dir)))
-        (with-current-buffer (cscope-new-buffer toplevel)
-          (setq default-directory toplevel
-                buffer-read-only nil)
-          (cscope-mode)
-          (current-buffer)))))
+               :test (lambda (x y)
+		       (string-prefix-p (expand-file-name y) x)))
+      (cscope-new-buffer (cscope-top-level dir))))
 
 (defun cscope-backup-incomplete-line (buffer)
   "Store the content of the current line in BUFFER's `cscope-leftover'.
@@ -287,15 +314,27 @@ cscope buffer by clearing it and displaying the search query."
     (process-send-string cscope-process (format "%d%s\n" (car search)
 						(cdr search)))))
 
-(defun cscope-query (type symbol)
-  "Initiate a cscope search of TYPE for SYMBOL."
-  (interactive (list (completing-read
-		      "Type: " (mapcar 'cdr cscope-search-types) nil t)
-		     (read-string "Symbol: " (current-word) 'cscope-history)))
+(defun cscope-read-string (prompt)
+  "Read a string from the minibuffer, adding it to `cscope-history'."
+  (let ((initial (cond ((use-region-p)
+			(buffer-substring-no-properties (region-beginning)
+							(region-end)))
+		       ((thing-at-point 'symbol)))))
+    (read-string type initial 'cscope-history)))
+
+(defun cscope-query (&optional type thing)
+  "Initiate a cscope search of TYPE for THING."
+  (interactive)
+  (unless type
+    (setf type (completing-read
+		"Type: " (mapcar 'cdr cscope-search-types) nil t)))
+  (unless thing
+    (setf thing
+	  (cscope-read-string (concat (cscope-type-title type) ": "))))
   (when (stringp type)
     (setf type (car (rassoc type cscope-search-types))))
   (with-current-buffer (cscope-find-buffer default-directory)
-    (let ((search (cons type symbol)))
+    (let ((search (cons type thing)))
       (setq cscope-searches (delete search cscope-searches)
 	    cscope-searches (push search cscope-searches))
       (unless (and cscope-process (process-live-p cscope-process))
