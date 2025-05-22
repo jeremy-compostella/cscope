@@ -136,7 +136,7 @@ If any root directory Makefile contains a reference to cscope, it
 assumes there is a cscope make target."
   (if (= (shell-command "grep cscope Makefile*") 0)
       "make cscope"
-    (let ((files "find . \\( -name '*.[chsS]' -o -name '*.cpp' \\) > cscope.files")
+    (let ((files "find . -name '*.[chsS]' > cscope.files")
 	  (database "cscope -b -q"))
       (concat files "&&" database))))
 
