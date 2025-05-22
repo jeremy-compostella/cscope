@@ -314,7 +314,8 @@ indicate the status of the search."
 		      (current-prefix-arg 0))
 		  (next-error))
 	      (select-window (get-buffer-window (current-buffer)))
-	      (goto-line 3))
+	      (goto-char (point-min))
+	      (forward-line 2))
 	    (setq cscope-inhibit-automatic-open nil)))))))
 
 (defun cscope-search-message (search)
