@@ -167,16 +167,17 @@ A `progress-reporter' is used to show the generation status in the echo area.
 The `cscope-database-sentinel' function is set as the process sentinel
 to handle completion."
   (interactive)
-  (let* ((process (start-file-process-shell-command
-		   "cscope" (current-buffer) (cscope-generate-database-command)))
-	 (progress (make-progress-reporter
-		    (format "Generating cscsope database for %s..."
-			    default-directory)))
-	 (timer-func (lexical-let ((progress progress))
-		       (apply-partially #'progress-reporter-update progress)))
-	 (timer (run-at-time .5 2 timer-func)))
-    (set-process-sentinel
-     process (apply-partially #'cscope-database-sentinel progress timer))))
+  (with-current-buffer (cscope-find-buffer default-directory)
+    (let* ((process (start-file-process-shell-command
+		     "cscope" (current-buffer) (cscope-generate-database-command)))
+	   (progress (make-progress-reporter
+		      (format "Generating cscsope database for %s..."
+			      default-directory)))
+	   (timer-func (lexical-let ((progress progress))
+			 (apply-partially #'progress-reporter-update progress)))
+	   (timer (run-at-time .5 2 timer-func)))
+      (set-process-sentinel
+       process (apply-partially #'cscope-database-sentinel progress timer)))))
 
 (defun cscope-buffers ()
   "Return a list of all buffers currently in `cscope-mode'."
