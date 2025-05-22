@@ -485,19 +485,21 @@ with a negated argument."
 		(set var (not (symbol-value var)))
 		(cscope-execute-query)
 		(message (format "%s %s" (cscope-symbol-title var)
-				 (if (symbol-value var) "enabled." "disabled.")))))))))
+				 (if (symbol-value var)
+				     "enabled."
+				   "disabled.")))))))))
 
 (defvar cscope-entry-actions
-   (let ((vec (make-vector (1+ (length cscope-search-types)) "Cscope Actions:")))
-     (let ((i 1))
-       (dolist (type cscope-search-types)
-	 (setf (aref vec i)
-	       (list (caddr type)
-		     (cscope-symbol-title (cadr type))
-		     (intern (concat "cscope-" (cadr type)))))
-	 (cl-incf i)))
-     vec)
-   "Defines cscope actions for the transient menu.
+  (let ((vec (make-vector (1+ (length cscope-search-types)) "Cscope Actions:")))
+    (let ((i 1))
+      (dolist (type cscope-search-types)
+	(setf (aref vec i)
+	      (list (caddr type)
+		    (cscope-symbol-title (cadr type))
+		    (intern (concat "cscope-" (cadr type)))))
+	(cl-incf i)))
+    vec)
+  "Defines cscope actions for the transient menu.
 
 The actions are built out of the `cscope-search-types'
 customizable variable.")
