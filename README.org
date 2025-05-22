@@ -29,6 +29,7 @@ This Emacs package provides a client interface for =cscope=, a developer's tool 
 	 (define-key (symbol-value map) (kbd "M-,") #'cscope-find-this-C-symbol)
 	 (define-key (symbol-value map) (kbd "C-c s") #'cscope-entry)))
      (setq next-error-recenter '(4))
+     (setq cscope-show-function nil)
    #+end_src
  
 ** Usage
