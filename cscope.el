@@ -59,10 +59,10 @@ names and documentation."
   :type 'alist)
 
 (defcustom cscope-display-options
-  '((truncate-lines "t")
-    (cscope-show-function "s")
-    (cscope-fontify-code-line "f")
-    (cscope-highlight-match "h"))
+  '(("t" . truncate-lines)
+    ("s" . cscope-show-function)
+    ("f" . cscope-fontify-code-line)
+    ("h" . cscope-highlight-match))
   "Alist controlling display options in the cscope buffer.
 Each element is a list of the form (VARIABLE KEY), where:
 - VARIABLE is the symbol of the boolean variable controlling the option.
@@ -252,17 +252,36 @@ to the new output chunk for correct parsing."
   "Apply syntax highlighting to CONTEXT string."
   (with-temp-buffer
     (insert context)
-    (let ((c-mode-hook '()))
+    (let ((prog-mode-hook '())
+	  (c-mode-hook '()))
       (c-mode))
     (font-lock-ensure (point-min) (point-max))
     (goto-char (point-min))
-    (let ((pos (point-min)))
+    (let ((pos (point-min))
+	  next)
       (while (setf next (next-property-change pos))
 	(when-let ((face (get-text-property pos 'face)))
 	  (put-text-property pos next 'face nil)
 	  (put-text-property pos next 'font-lock-face face))
 	(setf pos next)))
     (buffer-string)))
+
+(defun cscope-render-context (context)
+  (setf context (string-trim-left context))
+  (when cscope-fontify-code-line
+    (setf context (cscope-fontify context)))
+  (if cscope-highlight-match
+      (let ((thing (cdar cscope-searches)))
+	(with-temp-buffer
+	  (insert context)
+	  (goto-char (point-min))
+	  (while (search-forward thing nil t)
+	    (replace-match (propertize (match-string 0)
+                                       'face nil
+                                       'font-lock-face 'cscope-match)
+			   t t))
+	  (buffer-string)))
+    context))
 
 (defun cscope-insert-result (buffer file function line context)
   "Insert a cscope search result into BUFFER.
@@ -280,27 +299,17 @@ Highlights the search symbol in the context."
     (let ((inhibit-read-only t))
       (save-excursion
         (goto-char (point-max))
-	(let ((fun (cond ((not cscope-show-function) "")
-			 ((string= function "<global>") "")
+	(let ((fun (cond ((string= function "<global>") "")
 			 ((string= function (cdar cscope-searches)) "")
-			 ((concat (propertize function 'face nil
-					      'font-lock-face
-					      'font-lock-function-name-face)
-				  ":")))))
-          (insert (format "%s:%s:%s" file line fun))
-          (let ((start (point))
-		(context (if cscope-fontify-code-line
-			     (cscope-fontify context)
-			   context)))
-            (insert (string-trim-left context) "\n")
-            (save-excursion
-              (goto-char start)
-	      (when cscope-highlight-match
-		(while (search-forward (cdar cscope-searches) nil t)
-		  (replace-match (propertize (match-string 0)
-                                             'face nil
-                                             'font-lock-face 'cscope-match)
-				 t t))))))))))
+			 ((propertize
+			   (concat (propertize function 'face nil
+					       'font-lock-face
+					       'font-lock-function-name-face)
+				   ":")
+			   'invisible
+			   (not cscope-show-function))))))
+          (insert (format "%s:%s:%s%s\n" file line fun
+			  (cscope-render-context context))))))))
 
 (defun cscope-filter (process output)
   "Filter the output from the cscope process.
@@ -466,14 +475,34 @@ Emacs commands."
               (interactive)
               (cscope-query (cadr feature) nil))))))
 
-(defun cscope-create-toggle-functions ()
+(defun cscope-toggle-invisible-property (invisible)
+  (save-excursion
+    (let ((pos (point-min))
+	  (inhibit-read-only t))
+      (while (setf next (next-property-change pos))
+	(when (memq 'invisible (text-properties-at pos))
+	  (put-text-property pos next 'invisible invisible))
+	(setf pos next)))))
+
+(defun cscope-re-render-context ()
+  (save-excursion
+    (goto-char (point-min))
+    (forward-line 2)
+    (let ((inhibit-read-only t))
+      (while (re-search-forward ":[0-9]+:\\(.*:\\)?\\(.*\\)" nil t)
+	(let ((rendered (save-match-data
+			  (cscope-render-context
+			   (match-string-no-properties 2)))))
+	  (replace-match rendered nil nil nil 2))))))
+
+(defun cscope-generate-toggle-functions ()
   "Create interactive toggle functions from `cscope-display-options'.
 
 The function name is constructed by prefixing 'toggle-' to the
 option's variable name, allowing users to toggle these display
 options on or off within the cscope interface."
   (dolist (option cscope-display-options)
-    (let* ((var (car option))
+    (let* ((var (cdr option))
 	   (name (symbol-name var)))
       (when (string-prefix-p "cscope-" name)
 	(fset (intern (concat "toggle-" name))
@@ -483,7 +512,13 @@ options on or off within the cscope interface."
 		  (interactive)
 		  (make-local-variable var)
 		  (set var (not (symbol-value var)))
-		  (cscope-execute-query)
+		  (cond ((string= name "cscope-show-function")
+			 (cscope-toggle-invisible-property
+			  (not cscope-show-function)))
+			((or (string= name "cscope-highlight-match")
+			     (string= name "cscope-fontify-code-line"))
+			 (cscope-re-render-context))
+			((cscope-execute-query)))
 		  (message (format "%s %s" (cscope-symbol-title var)
 				   (if (symbol-value var)
 				       "enabled."
@@ -504,7 +539,7 @@ customizable variable."
 	(cl-incf i)))
     vec))
 
-(defun cscope-generate-toggle-functions ()
+(defun cscope-generate-toggle-actions ()
   "Create display toggle actions for the `cscope-entry' menu.
 
 The actions are built out of the `cscope-display-options'
@@ -512,8 +547,8 @@ customizable variable."
   (let ((vec (make-vector (1+ (length cscope-display-options)) "Toggle:"))
         (i 1))
     (dolist (option cscope-display-options)
-      (let ((var (car option))
-            (key (cadr option)))
+      (let ((var (cdr option))
+            (key (car option)))
         (setf (aref vec i)
               (list (concat "t" key)
                     (cscope-symbol-title var)
@@ -525,11 +560,11 @@ customizable variable."
   "Create the mode line entries for cscope display options."
   (mapcar (lambda (option)
 	    `(:eval
-	      (propertize ,(cadr option)
-			  'face (if ,(car option)
+	      (propertize ,(car option)
+			  'face (if ,(cdr option)
  				    'compilation-mode-line-exit
 				  'compilation-error)
-			  'help-echo ,(cscope-symbol-title (car option)))))
+			  'help-echo ,(cscope-symbol-title (cdr option)))))
 	  cscope-display-options))
 
 (transient-define-prefix cscope-entry ()
