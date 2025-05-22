@@ -1,62 +1,57 @@
 This Emacs package provides a client interface for =cscope=, a developer's tool for browsing C/C++ source code. It allows users to perform various cscope queries directly within Emacs and view the results in a dedicated buffer with features for easy navigation. This package provides a smooth integration by adhering to the traditional Emacs principle of a compilation or grep buffer.
-
 ** Features
-- *Integrate Cscope searches within Emacs:* Perform cscope queries without leaving your editor.
-- *Automatic Database Generation:* If a =cscope.out= database is not found in the current project, the package can generate it automatically.
-- *Multiple Search Types:* Supports common cscope searches such as finding symbols, global definitions, called functions, calling functions, text strings, and files including a specific file.
-- *Dedicated Results Buffer:* Displays search results in a special =cscope-mode= buffer, derived from =compilation-mode=. The mode line displays the number of matches found.
-- *History of Queries:* Remembers symbols you've searched for.
-- *Project-Aware:* Manages cscope buffers based on project directories, integrating with Magit to find the project's top-level directory.
-- *Interactive Commands:* Provides interactive functions for each search type.
+- *Integration with cscope:* Executes cscope searches directly from Emacs.
+- *Multiple Search Types:* Supports all standard cscope search types (find symbol, definition, callers, callees, text, egrep pattern, file, including files, assignments).
+- *Result Navigation:* Provides a dedicated =cscope-mode= for displaying search results, allowing easy navigation with =next-error= and =previous-error= (bound to =n= and =p= by default, inherited from =grep-mode=).
+- *History:* Maintains a history of previous searches, allowing you to easily repeat or undo searches.
+- *Project Awareness:* Attempts to intelligently determine the top-level directory of your project, making it easier to find the =cscope.out= database. Supports git repositories.
+- *Database Generation:* Provides a function to generate the =cscope.out= database directly from Emacs.
+- *Transient Menu:* Provides a transient menu (=e= key in cscope-mode) for easy access to common cscope actions.
+** Requirements
+- Emacs 29.4 or later
+- Magit 3.3.0 or later
+- A working installation of the =cscope= command-line tool.
 ** Installation
-1. Ensure =cscope.el= is placed in a directory included in your Emacs =load-path=.
-
-2. Add the following to your Emacs configuration file (e.g., =~/.emacs.d/init.el= or =~/.emacs=):
-
+1. Make =cscope.el= available in your =load-path=.
+2. Add the following to your Emacs initialization file (=.emacs=, =init.el=, etc.):
    #+begin_src emacs-lisp
-   (require 'cscope)
+     (require 'cscope)
    #+end_src
-
+3. Optionally, you can bind some keys; below is an example configuration.
+   #+begin_src emacs-lisp
+     (require 'asm-mode)
+     (require 'cc-mode)
+     (require 'dired)
+     (require 'ld-script)
+     (dolist (mode '(c ld-script asm dired))
+       (let ((map (intern (concat (symbol-name mode) "-mode-map"))))
+	 (define-key (symbol-value map) (kbd "M-.") #'cscope-find-this-function-definition)
+	 (define-key (symbol-value map) (kbd "M-,") #'cscope-find-this-C-symbol)
+	 (define-key (symbol-value map) (kbd "C-c s") #'cscope-entry)))
+     (setq next-error-recenter '(4))
+   #+end_src
+ 
 ** Usage
-*** Generating the Cscope Database
-Before you can perform searches, a =cscope.out= database needs to exist in your project's root directory.
-If the package doesn't find an existing =cscope.out= when a query is initiated, it will attempt to generate one by:
-1. Creating a =cscope.files= file by finding all =*.[ch]= and =*.cpp= files in the current directory and its subdirectories. 
-2. Running =cscope -b -q= to build the database.
+1. *Generate the cscope database:* In the root directory of your project, run =M-x cscope-generate-database=. This will create the =cscope.out= database file. Alternatively, if your project has a =Makefile= with a =cscope= target, the package will use =make cscope= to generate the database. The database will be automatically built on the first search attempt.
 
-Progress of the database generation will be shown in the echo area.
-*** Performing a Search
-You can initiate a cscope search using the generic =cscope-query= command or specific commands for each search type.
+2. *Perform a search:* Use =M-x cscope-query= to initiate a search. You'll be prompted for the search type and the symbol/text to search for. Alternatively, use the pre-defined commands for each search type:
 
-- =M-x cscope-query=:
-  - Prompts for the "Type" of search (e.g., "find-this-symbol", "find-global-definition"). You can use completion for available types.
-  - Prompts for the "Symbol" to search for. It will suggest the symbol at the current point and provide history for previous searches.
-- *Specific search commands (examples):*
-  - =M-x cscope-find-this-symbol=
-  - =M-x cscope-find-global-definition=
-  - =M-x cscope-find-called-functions=
-  - =M-x cscope-find-functions-calling-this-function=
-  - =M-x cscope-find-this-text-string=
-  - =M-x cscope-find-files-including-file=
+   - =M-x cscope-find-this-C-symbol=
+   - =M-x cscope-find-this-function-definition=
+   - =M-x cscope-Find-functions-called-by-this-function=
+   - =M-x cscope-find-functions-calling-this-function=
+   - =M-x cscope-find-this-text-string=
+   - =M-x cscope-change-this-text-string=
+   - =M-x cscope-find-this-egrep-pattern=
+   - =M-x cscope-find-this-file=
+   - =M-x cscope-find-files-including-file=
+   - =M-x cscope-find-assignments-to-this-symbol=
 
-  Each of these commands will prompt for the "Symbol" (or text string/file name as appropriate).
-*** Viewing Results
-Search results are displayed in a buffer named =*cscope:project-name*=. This buffer is in =cscope-mode=, which inherits from =compilation-mode=.
+3. *Navigate the results:* The search results will be displayed in a =cscope-mode= buffer.
 
-- *Navigation:*
-  - Use =n= (=next-error=) to jump to the next match.
-  - Use =p= (=previous-error=) to jump to the previous match.
-  - Clicking on a match or pressing =RET= on a line will take you to the corresponding location in the source file.
-- *Mode Line:* The mode line in the results buffer will show the number of matches found (e.g., =[15]=) and the status of the cscope process (e.g., =:run=, =:exit=). If no matches are found, a message will be displayed in the echo area.
-
-** Available Search Types
-The following search types are supported (mapping cscope's internal numbers to descriptive names):
-
-| Number | Name                                 | Interactive Command                             | Description                                |
-|--------+--------------------------------------+-------------------------------------------------+--------------------------------------------|
-|      0 | =find-this-symbol=                     | =M-x cscope-find-this-symbol=                     | Find all references to a symbol.           |
-|      1 | =find-global-definition=               | =M-x cscope-find-global-definition=               | Find the global definition(s) of a symbol. |
-|      2 | =find-called-functions=                | =M-x cscope-find-called-functions=                | Find functions called by a given function. |
-|      3 | =find-functions-calling-this-function= | =M-x cscope-find-functions-calling-this-function= | Find functions that call a given function. |
-|      4 | =find-this-text-string=                | =M-x cscope-find-this-text-string=                | Find all occurrences of a text string.     |
-|      8 | =find-files-including-file=            | =M-x cscope-find-files-including-file=            | Find files that =#include= a specified file. |
+   - Use =M-p= or =M-n= to move the cursor to the previous or next match.
+   - Use =n= (next-error) and =p= (previous-error) to move between matches. Pressing =<return>= on a match will jump to the corresponding location.
+   - Use ={= and =}= to move the cursor to the previous or next file.
+   - Use =C-o= to display the current match.
+   - Use =RET= to jump to the current match.
+   - Use =P= or =N= to execute the previous or the next search in the cscope buffer history.
