@@ -70,6 +70,9 @@ Each element is a list of the form (VARIABLE KEY), where:
   :type 'alist)
 
 (defun cscope-symbol-title (symbol)
+  "Generate a user-friendly title from a symbol or symbol string.
+
+This is used for displaying search types in menus and messages."
   (with-temp-buffer
     (save-excursion
       (insert (if (symbolp symbol)
