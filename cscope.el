@@ -598,7 +598,7 @@ user to quickly navigate between different cscope result buffers."
   "Defines a transient menu cscope."
   ["Place holder"]
   ["Database"
-   ("g" "Regenerate" cscope-generate-database)]
+   ("G" "Regenerate" cscope-generate-database)]
   ["Buffer(s)"
    ("b" "Switch to a buffer" cscope-switch-to-buffer)]
   (interactive)
