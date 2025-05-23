@@ -191,8 +191,8 @@ to handle completion."
 
 (defun cscope-new-buffer (dir)
   "Generate a new buffer for cscope results associated with DIR.
-The buffer name is based on the non-directory part of DIR,
-prefixed with '*cscope:' and suffixed with '*'."
+The buffer name is based on the last directory part of DIR,
+prefixed with 'cscope:'."
   (when (string= (substring dir -1)  "/")
     (setf dir (substring dir 0 -1)))
   (let* ((directory (file-name-nondirectory (directory-file-name dir)))
