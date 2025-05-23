@@ -39,6 +39,14 @@
   "Whether to apply syntax highlighting to code lines in results."
   :type 'boolean)
 
+(defcustom cscope-highlight-and-font-line-limit 500
+  "The maximum number of lines to apply syntax highlighting in search results.
+
+When the number of lines exceeds this limit, syntax highlighting will be
+disabled to improve performance. This helps prevent slowdowns when dealing
+with large result sets."
+  :type 'number)
+
 (defcustom cscope-highlight-match t
   "When non-nil, highlights the matching symbols in search results."
   :type 'boolean)
@@ -305,7 +313,16 @@ Highlights the search symbol in the context."
       (setq next-error-last-buffer buffer))
     (when (= cscope-num-matches-found 2)
       (display-buffer (current-buffer)))
-    (let ((inhibit-read-only t))
+    (when (and cscope-fontify-code-line
+	       (= cscope-num-matches-found cscope-fontify-line-number-limit))
+      (message "Fontification limit reached, disabling fontification."))
+    (let* ((inhibit-read-only t)
+	   (below-limit (< cscope-num-matches-found
+			   cscope-highlight-and-font-line-limit))
+	   (cscope-fontify-code-line (and below-limit
+					  cscope-fontify-code-line))
+	   (cscope-highlight-match (and below-limit
+					cscope-highlight-match)))
       (save-excursion
         (goto-char (point-max))
 	(let ((fun (if (or (string= function "<global>")
