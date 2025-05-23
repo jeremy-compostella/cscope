@@ -719,15 +719,18 @@ which buffer to refer to for displaying the error."
     (kill-buffer buffer)))
 
 (defvar cscope-mode-map (cl-copy-list grep-mode-map))
+(define-key cscope-mode-map (kbd "<return>") #'cscope-goto-match)
+(define-key cscope-mode-map (kbd "C-o") nil)
+(define-key cscope-mode-map (kbd "C-q") #'quit-window)
 (define-key cscope-mode-map (kbd "e") #'cscope-entry)
-(define-key cscope-mode-map (kbd "t") #'cscope-toggle)
 (define-key cscope-mode-map (kbd "g") #'cscope-execute-query)
 (define-key cscope-mode-map (kbd "G") #'cscope-generate-database)
-(define-key cscope-mode-map (kbd "P") #'cscope-previous-query)
+(define-key cscope-mode-map (kbd "k") #'cscope-kill-current-error-buffer)
+(define-key cscope-mode-map (kbd "o") #'cscope-display-error)
+(define-key cscope-mode-map (kbd "q") #'cscope-quit-current-error)
+(define-key cscope-mode-map (kbd "t") #'cscope-toggle)
 (define-key cscope-mode-map (kbd "N") #'cscope-next-query)
-(define-key cscope-mode-map (kbd "C-q") #'cscope-quit-current-error)
-(define-key cscope-mode-map (kbd "C-k") #'cscope-kill-current-error-buffer)
-(define-key cscope-mode-map (kbd "<return>") #'cscope-goto-match)
+(define-key cscope-mode-map (kbd "P") #'cscope-previous-query)
 
 ;;;###autoload
 (define-compilation-mode cscope-mode "Cscope"
