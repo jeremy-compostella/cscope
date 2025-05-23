@@ -278,7 +278,7 @@ to the new output chunk for correct parsing."
 	(setf pos next)))
     (buffer-string)))
 
-(defun cscope-render-context (context)
+(defun cscope-insert-rendered-context (context)
   "Renders CONTEXT with optional fontification and highlighting.
 
 This function takes a CONTEXT string, which represents a line of
@@ -287,18 +287,14 @@ on customizable variables."
   (setf context (string-trim-left context))
   (when cscope-fontify-code-line
     (setf context (cscope-fontify context)))
-  (if cscope-highlight-match
-      (let ((thing (cdar cscope-searches)))
-	(with-temp-buffer
-	  (insert context)
-	  (goto-char (point-min))
-	  (while (search-forward thing nil t)
-	    (replace-match (propertize (match-string 0)
-                                       'face nil
-                                       'font-lock-face 'cscope-match)
-			   t t))
-	  (buffer-string)))
-    context))
+  (save-excursion
+    (insert context))
+  (when cscope-highlight-match
+    (let ((thing (cdar cscope-searches)))
+      (while (search-forward thing (line-end-position) t)
+	(let ((ol (make-overlay (match-beginning 0) (match-end 0))))
+	  (overlay-put ol 'face 'highlight)))))
+  (goto-char (line-end-position)))
 
 (defun cscope-insert-result (buffer file function line context)
   "Insert a cscope search result into BUFFER.
@@ -335,8 +331,9 @@ Highlights the search symbol in the context."
 					  'font-lock-function-name-face)
 			      ":")
 		      'invisible (not cscope-show-function)))))
-          (insert (format "%s:%s:%s%s\n" file line fun
-			  (cscope-render-context context))))))))
+          (insert (format "%s:%s:%s" file line fun))
+	  (cscope-insert-rendered-context context)
+	  (insert "\n"))))))
 
 (defun cscope-filter (process output)
   "Filter the output from the cscope process.
@@ -551,11 +548,10 @@ through each result line and re-renders the context portion."
     (goto-char (point-min))
     (forward-line 2)
     (let ((inhibit-read-only t))
-      (while (re-search-forward ":[0-9]+:\\(.*:\\)?\\([a-zA-z_#].*\\)" nil t)
-	(let ((rendered (save-match-data
-			  (cscope-render-context
-			   (match-string-no-properties 2)))))
-	  (replace-match rendered nil t nil 2))))))
+      (while (re-search-forward ":[0-9]+:\\(.*:\\)?\\([a-zA-z_#\.].*\\)" nil t)
+	(let ((context (match-string-no-properties 2)))
+	  (delete-region (match-beginning 2) (match-end 2))
+	  (cscope-insert-rendered-context context))))))
 
 (defun cscope-generate-toggle-functions ()
   "Create interactive toggle functions from `cscope-display-options'.
@@ -707,7 +703,6 @@ which buffer to refer to for displaying the error."
 (define-key cscope-mode-map (kbd "N") #'cscope-next-query)
 (define-key cscope-mode-map (kbd "C-o") #'cscope-display-error)
 (define-key cscope-mode-map (kbd "<return>") #'cscope-goto-match)
-(copy-face 'match 'cscope-match)
 
 ;;;###autoload
 (define-compilation-mode cscope-mode "Cscope"
