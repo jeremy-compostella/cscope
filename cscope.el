@@ -271,6 +271,11 @@ to the new output chunk for correct parsing."
     (buffer-string)))
 
 (defun cscope-render-context (context)
+  "Renders CONTEXT with optional fontification and highlighting.
+
+This function takes a CONTEXT string, which represents a line of
+code found by cscope, and applies optional transformations based
+on customizable variables."
   (setf context (string-trim-left context))
   (when cscope-fontify-code-line
     (setf context (cscope-fontify context)))
