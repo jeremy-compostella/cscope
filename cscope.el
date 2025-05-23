@@ -308,16 +308,16 @@ Highlights the search symbol in the context."
     (let ((inhibit-read-only t))
       (save-excursion
         (goto-char (point-max))
-	(let ((fun (cond ((string= function "<global>") "")
-			 ((string= function "<unknown>"))
-			 ((string= function (cdar cscope-searches)) "")
-			 ((propertize
-			   (concat (propertize function 'face nil
-					       'font-lock-face
-					       'font-lock-function-name-face)
-				   ":")
-			   'invisible
-			   (not cscope-show-function))))))
+	(let ((fun (if (or (string= function "<global>")
+			   (string= function "<unknown>")
+			   (string= function (cdar cscope-searches)))
+		       ""
+		     (propertize
+		      (concat (propertize function 'face nil
+					  'font-lock-face
+					  'font-lock-function-name-face)
+			      ":")
+		      'invisible (not cscope-show-function)))))
           (insert (format "%s:%s:%s%s\n" file line fun
 			  (cscope-render-context context))))))))
 
