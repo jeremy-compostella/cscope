@@ -624,6 +624,18 @@ after jumping to the error."
 	(current-prefix-arg 0))
     (compile-goto-error)))
 
+(defun cscope-display-error ()
+  "Display error at the current point in another window.
+
+This function checks if the current buffer is in `cscope-mode`.
+If it is, it sets `next-error-last-buffer` to the current buffer.
+This ensures that when `compilation-display-error` is called, it knows
+which buffer to refer to for displaying the error."
+  (interactive)
+  (when (eq major-mode 'cscope-mode)
+    (setq next-error-last-buffer (current-buffer))
+    (compilation-display-error)))
+
 (defvar cscope-mode-map (cl-copy-list grep-mode-map))
 (define-key cscope-mode-map (kbd "e") #'cscope-entry)
 (define-key cscope-mode-map (kbd "t") #'cscope-toggle)
@@ -631,6 +643,7 @@ after jumping to the error."
 (define-key cscope-mode-map (kbd "G") #'cscope-generate-database)
 (define-key cscope-mode-map (kbd "P") #'cscope-previous-query)
 (define-key cscope-mode-map (kbd "N") #'cscope-next-query)
+(define-key cscope-mode-map (kbd "C-o") #'cscope-display-error)
 (define-key cscope-mode-map (kbd "<return>") #'cscope-goto-match)
 (copy-face 'match 'cscope-match)
 
