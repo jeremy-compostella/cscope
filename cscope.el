@@ -488,7 +488,8 @@ Emacs commands."
 (defun cscope-toggle-invisible-property (invisible)
   (save-excursion
     (let ((pos (point-min))
-	  (inhibit-read-only t))
+	  (inhibit-read-only t)
+	  next)
       (while (setf next (next-property-change pos))
 	(when (memq 'invisible (text-properties-at pos))
 	  (put-text-property pos next 'invisible invisible))
