@@ -694,6 +694,30 @@ which buffer to refer to for displaying the error."
     (setq next-error-last-buffer (current-buffer))
     (compilation-display-error)))
 
+(defun cscope-current-error-buffer ()
+  (save-excursion
+    (let* ((err (compilation-next-error 0 nil compilation-current-error))
+	   (loc (compilation--message->loc err))
+	   (file (caar (compilation--loc->file-struct loc)))
+	   (path (concat (expand-file-name
+			  (concat default-directory "/" file)))))
+      (cl-find path (buffer-list) :test 'string= :key 'buffer-file-name))))
+
+(defun cscope-quit-current-error ()
+  "Close the window displaying the current error if visible."
+  (interactive)
+  (save-selected-window
+    (when-let ((buffer (cscope-current-error-buffer)))
+      (when-let ((window (get-buffer-window buffer)))
+	(with-selected-window window
+          (quit-window))))))
+
+(defun cscope-kill-current-error-buffer ()
+  (interactive)
+  "Kill the buffer of the current error."
+  (when-let ((buffer (cscope-current-error-buffer)))
+    (kill-buffer buffer)))
+
 (defvar cscope-mode-map (cl-copy-list grep-mode-map))
 (define-key cscope-mode-map (kbd "e") #'cscope-entry)
 (define-key cscope-mode-map (kbd "t") #'cscope-toggle)
@@ -701,7 +725,8 @@ which buffer to refer to for displaying the error."
 (define-key cscope-mode-map (kbd "G") #'cscope-generate-database)
 (define-key cscope-mode-map (kbd "P") #'cscope-previous-query)
 (define-key cscope-mode-map (kbd "N") #'cscope-next-query)
-(define-key cscope-mode-map (kbd "C-o") #'cscope-display-error)
+(define-key cscope-mode-map (kbd "C-q") #'cscope-quit-current-error)
+(define-key cscope-mode-map (kbd "C-k") #'cscope-kill-current-error-buffer)
 (define-key cscope-mode-map (kbd "<return>") #'cscope-goto-match)
 
 ;;;###autoload
