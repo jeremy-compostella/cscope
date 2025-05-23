@@ -551,11 +551,11 @@ through each result line and re-renders the context portion."
     (goto-char (point-min))
     (forward-line 2)
     (let ((inhibit-read-only t))
-      (while (re-search-forward ":[0-9]+:\\(.*:\\)?\\(.*\\)" nil t)
+      (while (re-search-forward ":[0-9]+:\\(.*:\\)?\\([a-zA-z_#].*\\)" nil t)
 	(let ((rendered (save-match-data
 			  (cscope-render-context
 			   (match-string-no-properties 2)))))
-	  (replace-match rendered nil nil nil 2))))))
+	  (replace-match rendered nil t nil 2))))))
 
 (defun cscope-generate-toggle-functions ()
   "Create interactive toggle functions from `cscope-display-options'.
