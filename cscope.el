@@ -417,11 +417,25 @@ cscope buffer by clearing it and displaying the search query."
     (process-send-string cscope-process (format "%d%s\n" (car search)
 						(cdr search)))))
 
+(defun cscope-point-within-code-context ()
+  "Test if the current point is in a code line context."
+  (and (not (= (point) (point-max)))
+       (>= (line-number-at-pos) 3)
+       (let ((current (point)))
+	 (save-excursion
+	   (goto-char (line-beginning-position))
+	   (when (re-search-forward ":[0-9]+:" nil t)
+	     (>= current (match-end 0)))))))
+
 (defun cscope-read-string (prompt)
   "Read a string from the minibuffer, adding it to `cscope-history'."
   (let ((initial (cond ((use-region-p)
 			(buffer-substring-no-properties (region-beginning)
 							(region-end)))
+		       ((eq major-mode 'cscope-mode)
+			(if (cscope-point-within-code-context)
+			    (thing-at-point 'symbol)
+			  (cdar cscope-searches)))
 		       ((thing-at-point 'symbol)))))
     (read-string prompt initial 'cscope-history)))
 
