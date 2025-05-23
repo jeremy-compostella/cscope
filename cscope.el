@@ -494,6 +494,12 @@ Emacs commands."
               (cscope-query (cadr feature) nil))))))
 
 (defun cscope-toggle-invisible-property (invisible)
+  "Toggle the 'invisible' text property on the current buffer.
+
+This function iterates through all text properties in the current
+buffer and toggles the 'invisible' property on those that already
+have it.  This is used to show/hide function names in the cscope
+results buffer based on the `cscope-show-function` setting."
   (save-excursion
     (let ((pos (point-min))
 	  (inhibit-read-only t)
@@ -504,6 +510,12 @@ Emacs commands."
 	(setf pos next)))))
 
 (defun cscope-re-render-context ()
+  "Re-render the code context lines with current settings.
+
+This function re-applies syntax highlighting and match highlighting to
+the context lines in the cscope buffer, based on the current values
+of `cscope-fontify-code-line` and `cscope-highlight-match`.  It iterates
+through each result line and re-renders the context portion."
   (save-excursion
     (goto-char (point-min))
     (forward-line 2)
