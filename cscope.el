@@ -567,6 +567,16 @@ customizable variable."
       (cl-incf i))
     vec))
 
+(defun cscope--init ()
+  "Initializes cscope mode by generating search functions, toggle
+functions, and transient menu actions."
+  (cscope-generate-search-functions)
+  (cscope-generate-toggle-functions)
+  (transient-replace-suffix 'cscope-entry '(0)
+    (cscope-generate-entry-actions))
+  (transient-replace-suffix 'cscope-toggle '(0)
+    (cscope-generate-toggle-actions)))
+
 (defun cscope-generate-toggle-mode-line ()
   "Create the mode line entries for cscope display options."
   (mapcar (lambda (option)
@@ -663,11 +673,8 @@ results. The mode line displays the number of matches found."
     (setq-local compilation-error-regexp-alist grep-regexp-alist
 		compilation-error-face grep-hit-face
 		compilation-mode-line-errors mode-line)
-    (cscope-generate-search-functions)
-    (cscope-generate-toggle-functions)
-    (transient-replace-suffix 'cscope-entry '(0)
-      (cscope-generate-entry-actions))
-    (transient-replace-suffix 'cscope-toggle '(0)
-      (cscope-generate-toggle-actions))))
+    (cscope--init)))
 
+;; Make sure function and menu are initialized on load
+(cscope--init)
 (provide 'cscope)
