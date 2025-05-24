@@ -713,8 +713,8 @@ which buffer to refer to for displaying the error."
           (quit-window))))))
 
 (defun cscope-kill-current-error-buffer ()
-  (interactive)
   "Kill the buffer of the current error."
+  (interactive)
   (when-let ((buffer (cscope-current-error-buffer)))
     (kill-buffer buffer)))
 
