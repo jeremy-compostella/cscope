@@ -1,23 +1,20 @@
-This Emacs package provides a client interface for =cscope=, a developer's tool for browsing C/C++ source code. It allows users to perform various cscope queries directly within Emacs and view the results in a dedicated buffer with features for easy navigation. This package provides a smooth integration by adhering to the traditional Emacs principle of a compilation or grep buffer.
+This Emacs package provides a client interface for =cscope=, a developer's tool for browsing C/C++ source code. It allows users to perform various cscope queries directly within Emacs and view the results in a dedicated buffer with features for easy navigation. This package provides smooth integration by adhering to the traditional Emacs principle of a compilation or grep buffer.
 ** Features
-- *Integration with cscope:* Executes cscope searches directly from Emacs.
 - *Multiple Search Types:* Supports all standard cscope search types (find symbol, definition, callers, callees, text, egrep pattern, file, including files, assignments).
 - *Result Navigation:* Provides a dedicated =cscope-mode= for displaying search results, allowing easy navigation with =next-error= and =previous-error= (bound to =n= and =p= by default, inherited from =grep-mode=).
 - *History:* Maintains a history of previous searches, allowing you to easily repeat or undo searches.
-- *Project Awareness:* Attempts to intelligently determine the top-level directory of your project, making it easier to find the =cscope.out= database. Supports git repositories.
+- *Project Awareness:* Attempts to intelligently determine the top-level directory of your project, making it easier to find the =cscope.out= database. Supports Git repositories.
 - *Database Generation:* Provides a function to generate the =cscope.out= database directly from Emacs.
-- *Transient Menu:* Provides a transient menu (=e= key in cscope-mode) for easy access to common cscope actions.
-** Requirements
-- Emacs 29.4 or later
-- Magit 3.3.0 or later
-- A working installation of the =cscope= command-line tool.
-** Installation
+- *Transient Menu:* Provides a transient menu (=e= key in cscope-mode) for easy access to common cscope actions and another one for easily toggling display options.
+- *Filter:* Provides functions to dynamically filter results using regular expressions.
+- *Display Options:* Provides display options such as code font locking, highlighting of the search pattern, and hiding or displaying the parent function.
+** Installation And Configuration
 1. Make =cscope.el= available in your =load-path=.
 2. Add the following to your Emacs initialization file (=.emacs=, =init.el=, etc.):
    #+begin_src emacs-lisp
      (require 'cscope)
    #+end_src
-3. Optionally, you can bind some keys; below is an example configuration.
+3. Optionally, you can bind some keys globally or locally; below is a local key binding example configuration.
    #+begin_src emacs-lisp
      (require 'asm-mode)
      (require 'cc-mode)
@@ -26,36 +23,111 @@ This Emacs package provides a client interface for =cscope=, a developer's tool 
      (require 'magit)
      (dolist (mode '(cscope magit-status c ld-script asm dired))
        (let ((map (intern (concat (symbol-name mode) "-mode-map"))))
-	 (define-key (symbol-value map) (kbd "M-.") #'cscope-find-this-function-definition)
-	 (define-key (symbol-value map) (kbd "M-,") #'cscope-find-this-C-symbol)
-	 (define-key (symbol-value map) (kbd "C-c s") #'cscope-entry)))
-     (setq next-error-recenter '(4)
-	   cscope-show-function nil
-	   cscope-highlight-match nil)
+         (define-key (symbol-value map) (kbd "M-.") #'cscope-find-this-function-definition)
+         (define-key (symbol-value map) (kbd "M-,") #'cscope-find-this-C-symbol)
+         (define-key (symbol-value map) (kbd "C-c s") #'cscope-entry)))
    #+end_src
- 
+4. Customize general options; here are a few examples:
+   #+begin_src emacs-lisp
+     (setq next-error-recenter '(4)          ; Center the target buffer automatically.
+           cscope-show-function nil          ; Do not show the parent function.
+           cscope-highlight-match nil)       ; Do not highlight the search pattern.
+   #+end_src
 ** Usage
-1. *Generate the cscope database:* In the root directory of your project, run =M-x cscope-generate-database=. This will create the =cscope.out= database file. Alternatively, if your project has a =Makefile= with a =cscope= target, the package will use =make cscope= to generate the database. The database will be automatically built on the first search attempt.
+*** Generate the cscope Database
+The cscope database is created automatically when you execute your first cscope search (for example, using =M-x cscope-find-this-C-symbol= or =M-,= as configured). The project's top-level directory, which cscope uses to build the database, is determined using the following priority:
 
-2. *Perform a search:* Use =M-x cscope-query= to initiate a search. You'll be prompted for the search type and the symbol/text to search for. Alternatively, use the pre-defined commands for each search type:
+1. If you're working within a Git repository, the repository's root directory is used.
+2. Otherwise, cscope searches parent directories for a =cscope.out= file; the first directory containing this file is used.
+3. If neither of the above conditions is met, the current directory is used.
 
-   - =M-x cscope-find-this-C-symbol=
-   - =M-x cscope-find-this-function-definition=
-   - =M-x cscope-Find-functions-called-by-this-function=
-   - =M-x cscope-find-functions-calling-this-function=
-   - =M-x cscope-find-this-text-string=
-   - =M-x cscope-change-this-text-string=
-   - =M-x cscope-find-this-egrep-pattern=
-   - =M-x cscope-find-this-file=
-   - =M-x cscope-find-files-including-file=
-   - =M-x cscope-find-assignments-to-this-symbol=
+The database generation can be enforced by a direct call to the =cscope-generate-database= function. This generates the =cscope.out= database file.
 
-3. *Navigate the results:* The search results will be displayed in a =cscope-mode= buffer.
+When a Makefile is present in the top-level directory, cscope looks for the presence of the word "cscope" in it. If it finds it, it assumes that there is a =cscope= make target and uses it. Otherwise, it uses the =find . -name '*.[chsS]' > cscope.files && cscope -b -q= shell command.
 
-   - Use =M-p= or =M-n= to move the cursor to the previous or next match.
-   - Use =n= (next-error) and =p= (previous-error) to move between matches. Pressing =<return>= on a match will jump to the corresponding location.
-   - Use ={= and =}= to move the cursor to the previous or next file.
-   - Use =C-o= to display the current match.
-   - Use =RET= to jump to the current match.
-   - Use =P= or =N= to execute the previous or the next search in the cscope buffer history.
-   - Use =e= to show the transient menu, which includes all the cscope search options but also some result display options.
+The =G= key can be used to regenerate a database from a cscope buffer.
+
+You can customize this behavior by advising the =cscope-generate-database-command= function. Typically, I like to include =Kconfig= and =Makefile= when I work on the coreboot project. Here is how I achieve this:
+
+#+begin_src emacs-lisp
+  (require 'cscope)
+  (defun my-cscope-generate-database-command (orig-fun &rest args)
+    "Include Makefile and Kconfig files, along with C source files,
+  when the project is coreboot."
+    (if (= (shell-command "grep coreboot .git/config") 0)
+        (let ((files (format "find . \\( %s \\) > cscope.files"
+                             (mapconcat (lambda (x) (format "-name '%s'" x))
+                                        '("*.[chsS]" "Makefile*" "Kconfig")
+                                        " -o ")))
+              (database "cscope -b -q"))
+          (concat files "&&" database))
+    (apply orig-fun args)))
+
+  (advice-add 'cscope-generate-database-command
+              :around #'my-cscope-generate-database-command)
+#+end_src
+
+*** Perform a Search
+The traditional way to initiate a search is to either use the transient menu, which is bound to =C-c s= in a few major modes with the suggested configuration above, or the =e= key of an existing cscope buffer, or to use a key binding (such as =M-,= and =M-,= in the configuration above).
+
+You can also use =M-x cscope-query=. You'll be prompted for the search type and the symbol/text to search for. Alternatively, use the pre-defined commands for each search type:
+
+- =M-x cscope-find-this-C-symbol=
+- =M-x cscope-find-this-function-definition=
+- =M-x cscope-find-functions-called-by-this-function=
+- =M-x cscope-find-functions-calling-this-function=
+- =M-x cscope-find-this-text-string=
+- =M-x cscope-change-this-text-string=
+- =M-x cscope-find-this-egrep-pattern=
+- =M-x cscope-find-this-file=
+- =M-x cscope-find-files-including-file=
+- =M-x cscope-find-assignments-to-this-symbol=
+
+If you initiate a cscope search outside of a cscope buffer (e.g., while editing source code) and the search returns only one match, the file containing that match will be opened directly, bypassing the cscope buffer.
+*** Key Binding and Navigation
+The search results will be displayed in a =cscope-mode= buffer.
+
+Actions limited to the cscope buffer itself:
+
+- Use =M-p= or =M-n= to move the cursor to the previous or next match.
+- Use ={= and =}= to move the cursor to the previous or next file.
+- Use =e= to show the transient menu, which includes all the cscope search options.
+- Use =f= to filter the results (refer to the *Filter Results* section below).
+- Use =g= to re-execute the current query.
+- Use =P= or =N= to execute the previous or the next search in the cscope buffer history.
+- Use =t= to open the display options menu (refer to the *Control Display* section below).
+- Use =C-q= to quit the cscope buffer window.
+
+Actions on the matching result and corresponding buffers or windows:
+
+- =<Return>= on a match jumps to the corresponding location and quits the cscope buffer.
+- Use =k= to kill the buffer corresponding to the current match.
+- Use =K= to kill the buffers corresponding to all the matches in the cscope buffer.
+- Use =o= to display the current match.
+- Use =O= to jump to the current match without quitting the cscope buffer.
+- Use =q= to quit the window displaying the corresponding match.
+- Use =Q= to quit all windows displaying matches of the cscope buffer.
+- Use =n= (next-error) and =p= (previous-error) to move and jump to locations.
+
+Since =cscope-mode= is derived from =compilation-mode=, =M-x next-error= and =M-x error-function= can be used to browse the results outside of the cscope buffer.
+*** Filter Results
+The =M-x cscope-filter-lines= command provides the main way to filter lines within the cscope results buffer using a regular expression. In =cscope-mode=, this command is bound to the =f= key.
+
+- Without a prefix argument (default): The command /includes/ only the lines that /match/ the specified regular expression, deleting all other lines.
+- With a prefix argument (e.g., =C-u f=): The command /excludes/ the lines that /match/ the specified regular expression, deleting them from the buffer.
+
+**** Important Considerations
+- =cscope-filter-lines= modifies the cscope results buffer directly. The deleted lines are gone. To restore them, you can re-execute the query with =g= or =M-x cscope-execute-query=.
+- The =regexp= you enter must be a valid Emacs regular expression. You can use features like character classes (=[a-z]=) and quantifiers (=*=, =+=, =?=) in your regular expressions.
+*** Control the Display Options
+This Emacs module provides display options to customize how cscope search results appear. Access these options via the toggle menu, activated by pressing =t=. The following display options are available:
+
+1. Show Function Name (=s= or =M-x cscope-toggle-show-function=): Toggles the display of the function name alongside the file and line number in the search results. The default behavior is determined by the =cscope-show-function= variable. When enabled, function names are shown; when disabled, they are hidden.
+
+2. Syntax Highlighting (=f= or =M-x cscope-toggle-fontify-code-line=): Toggles syntax highlighting (fontification) of the code lines in the search results. The default behavior is controlled by the =cscope-fontify-code-line= variable. When enabled, code lines are syntax highlighted; when disabled, they appear as plain text.
+
+3. Highlight Matching Symbols (=h= or =M-x cscope-toggle-highlight-match=): Toggles highlighting of the matching symbols within the search results. The default behavior is controlled by the =cscope-highlight-match= variable. When enabled, matching symbols are highlighted; when disabled, they are not.
+
+4. Truncate Lines (=t= or =M-x toggle-truncate-lines=): Toggles whether long lines in the results are truncated.
+
+To prevent performance issues with large result sets, the =cscope-highlight-and-font-line-limit= customizable variable limits the number of results for which syntax highlighting and match highlighting are enabled. It is set to 500 lines by default.
