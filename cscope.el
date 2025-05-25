@@ -54,7 +54,7 @@ with large result sets."
 (defcustom cscope-search-types
   '((0 "find-this-C-symbol" ",")
     (1 "find-this-function-definition" ".")
-    (2 "Find-functions-called-by-this-function" "c")
+    (2 "find-functions-called-by-this-function" "c")
     (3 "find-functions-calling-this-function" "C")
     (4 "find-this-text-string" "s")
     (5 "change-this-text-string" "S")
@@ -96,6 +96,9 @@ This is used for displaying search types in menus and messages."
 
 (defvar cscope-history '()
   "History list for symbols queried by cscope search functions.")
+
+(defvar cscope-filter-history '()
+  "History list for filter regular expressions.")
 
 (defvar-local cscope-process nil
   "Process object for the running cscope command.")
@@ -180,7 +183,8 @@ to handle completion."
   (interactive)
   (with-current-buffer (cscope-find-buffer default-directory)
     (let* ((process (start-file-process-shell-command
-		     "cscope" (current-buffer) (cscope-generate-database-command)))
+		     "cscope" (current-buffer)
+		     (cscope-generate-database-command)))
 	   (progress (make-progress-reporter
 		      (format "Generating cscsope database for %s..."
 			      default-directory)))
@@ -260,25 +264,27 @@ to the new output chunk for correct parsing."
 			   (setq-local cscope-leftover nil)))))
     (insert leftover)))
 
-(defun cscope-fontify (context)
+(defun cscope-fontify (file context)
   "Apply syntax highlighting to CONTEXT string."
-  (with-temp-buffer
-    (insert context)
-    (let ((prog-mode-hook '())
-	  (c-mode-hook '()))
-      (c-mode))
-    (font-lock-ensure (point-min) (point-max))
-    (goto-char (point-min))
-    (let ((pos (point-min))
-	  next)
-      (while (setf next (next-property-change pos))
-	(when-let ((face (get-text-property pos 'face)))
-	  (put-text-property pos next 'face nil)
-	  (put-text-property pos next 'font-lock-face face))
-	(setf pos next)))
-    (buffer-string)))
+  (if-let ((mode (cdr (cl-find file auto-mode-alist :key 'car
+			       :test (lambda (x y) (string-match y x))))))
+      (with-temp-buffer
+	(insert context)
+	(let ((prog-mode-hook '()))
+	  (funcall mode))
+	(font-lock-ensure (point-min) (point-max))
+	(goto-char (point-min))
+	(let ((pos (point-min))
+	      next)
+	  (while (setf next (next-property-change pos))
+	    (when-let ((face (get-text-property pos 'face)))
+	      (put-text-property pos next 'face nil)
+	      (put-text-property pos next 'font-lock-face face))
+	    (setf pos next)))
+	(buffer-string))
+    context))
 
-(defun cscope-insert-rendered-context (context)
+(defun cscope-insert-rendered-context (file context)
   "Renders CONTEXT with optional fontification and highlighting.
 
 This function takes a CONTEXT string, which represents a line of
@@ -286,7 +292,7 @@ code found by cscope, and applies optional transformations based
 on customizable variables."
   (setf context (string-trim-left context))
   (when cscope-fontify-code-line
-    (setf context (cscope-fontify context)))
+    (setf context (cscope-fontify file context)))
   (save-excursion
     (insert context))
   (when cscope-highlight-match
@@ -310,7 +316,7 @@ Highlights the search symbol in the context."
     (when (= cscope-num-matches-found 2)
       (display-buffer (current-buffer)))
     (when (and cscope-fontify-code-line
-	       (= cscope-num-matches-found cscope-fontify-line-number-limit))
+	       (= cscope-num-matches-found cscope-highlight-and-font-line-limit))
       (message "Fontification limit reached, disabling fontification."))
     (let* ((inhibit-read-only t)
 	   (below-limit (< cscope-num-matches-found
@@ -332,7 +338,7 @@ Highlights the search symbol in the context."
 			      ":")
 		      'invisible (not cscope-show-function)))))
           (insert (format "%s:%s:%s" file line fun))
-	  (cscope-insert-rendered-context context)
+	  (cscope-insert-rendered-context file context)
 	  (insert "\n"))))))
 
 (defun cscope-filter (process output)
@@ -537,6 +543,15 @@ results buffer based on the `cscope-show-function` setting."
 	  (put-text-property pos next 'invisible invisible))
 	(setf pos next)))))
 
+(defmacro for-all-cscope-match (&rest body)
+  (declare (indent 0))
+  `(save-excursion
+     (goto-char (point-min))
+     (forward-line 2)
+     (while (not (eobp))
+       (progn ,@body)
+       (forward-line))))
+
 (defun cscope-re-render-context ()
   "Re-render the code context lines with current settings.
 
@@ -544,14 +559,14 @@ This function re-applies syntax highlighting and match highlighting to
 the context lines in the cscope buffer, based on the current values
 of `cscope-fontify-code-line` and `cscope-highlight-match`.  It iterates
 through each result line and re-renders the context portion."
-  (save-excursion
-    (goto-char (point-min))
-    (forward-line 2)
+  (for-all-cscope-match
     (let ((inhibit-read-only t))
-      (while (re-search-forward ":[0-9]+:\\(.*:\\)?\\([a-zA-z_#\.].*\\)" nil t)
-	(let ((context (match-string-no-properties 2)))
-	  (delete-region (match-beginning 2) (match-end 2))
-	  (cscope-insert-rendered-context context))))))
+      (while (re-search-forward "\\(.*\\):[0-9]+:\\(.*:\\)?\\([a-zA-z_#\.].*\\)"
+				(line-end-position) t)
+	(let ((context (match-string-no-properties 3)))
+	  (delete-region (match-beginning 3) (match-end 3))
+	  (cscope-insert-rendered-context (match-string-no-properties 1)
+					  context))))))
 
 (defun cscope-generate-toggle-functions ()
   "Create interactive toggle functions from `cscope-display-options'.
@@ -682,7 +697,13 @@ after jumping to the error."
 	(current-prefix-arg 0))
     (compile-goto-error)))
 
-(defun cscope-display-error ()
+(defmacro cscope-on-match (&rest body)
+  (declare (indent 0))
+  `(when (eq major-mode 'cscope-mode)
+     (setq next-error-last-buffer (current-buffer))
+     (progn ,@body)))
+
+(defun cscope-display-match ()
   "Display error at the current point in another window.
 
 This function checks if the current buffer is in `cscope-mode`.
@@ -690,44 +711,91 @@ If it is, it sets `next-error-last-buffer` to the current buffer.
 This ensures that when `compilation-display-error` is called, it knows
 which buffer to refer to for displaying the error."
   (interactive)
-  (when (eq major-mode 'cscope-mode)
-    (setq next-error-last-buffer (current-buffer))
+  (cscope-on-match
     (compilation-display-error)))
 
-(defun cscope-current-error-buffer ()
-  (save-excursion
-    (let* ((err (compilation-next-error 0 nil compilation-current-error))
-	   (loc (compilation--message->loc err))
-	   (file (caar (compilation--loc->file-struct loc)))
-	   (path (concat (expand-file-name
-			  (concat default-directory "/" file)))))
-      (cl-find path (buffer-list) :test 'string= :key 'buffer-file-name))))
+(defun cscope-focus-on-current-match-window ()
+  "Focus on the window displaying the current match."
+  (interactive)
+  (cscope-on-match
+    (compilation-display-error)
+    (next-error 0)))
 
-(defun cscope-quit-current-error ()
+(defun cscope-current-match-buffer ()
+  "Return the buffer associated with the current match."
+  (let* ((err (compilation-next-error 0))
+	 (loc (compilation--message->loc err))
+	 (file (caar (compilation--loc->file-struct loc)))
+	 (path (concat (expand-file-name
+			(concat default-directory "/" file)))))
+    (cl-find path (buffer-list) :test 'string= :key 'buffer-file-name)))
+
+(defun cscope-quit-current-match ()
   "Close the window displaying the current error if visible."
   (interactive)
-  (save-selected-window
-    (when-let ((buffer (cscope-current-error-buffer)))
-      (when-let ((window (get-buffer-window buffer)))
-	(with-selected-window window
-          (quit-window))))))
+  (cscope-on-match
+    (when-let ((buffer (cscope-current-match-buffer))
+	       (window (get-buffer-window buffer)))
+      (with-selected-window window
+	(quit-window)))))
 
-(defun cscope-kill-current-error-buffer ()
+(defun cscope-quit-all ()
+  "Close all windows displaying cscope errors."
+  (interactive)
+  (for-all-cscope-match
+    (cscope-quit-current-match)))
+
+(defun cscope-kill-current-match-buffer ()
   "Kill the buffer of the current error."
   (interactive)
-  (when-let ((buffer (cscope-current-error-buffer)))
+  (when-let ((buffer (cscope-current-match-buffer)))
     (kill-buffer buffer)))
+
+(defun cscope-kill-all ()
+  (interactive)
+  (for-all-cscope-match
+    (cscope-kill-current-match-buffer)))
+
+(defun cscope-filter-lines (regexp)
+  "Filter cscope results in the current buffer using REGEXP.
+
+With a prefix argument, *exclude* lines matching REGEXP.
+Without a prefix argument, *include* only lines matching REGEXP.
+
+The REGEXP is read from the minibuffer, and added to
+`cscope-filter-history' for easy reuse.  A prefix argument inverts
+the filtering behavior, deleting lines that *match* the regexp instead
+of those that don't.  The buffer is modified in place."
+  (interactive (list (read-string (format "Filter%s regular expression: "
+					  (if current-prefix-arg
+					      " out"
+					    ""))
+				  nil 'cscope-filter-history)))
+  (save-excursion
+    (goto-char (point-min))
+    (forward-line)
+    (let ((inhibit-read-only t))
+      (delete-region (line-beginning-position) (line-end-position))
+      (insert (propertize "(Filtered)" 'font-lock-face 'italic))
+      (forward-line)
+      (if current-prefix-arg
+	  (delete-matching-lines regexp)
+	(delete-non-matching-lines regexp)))))
 
 (defvar cscope-mode-map (cl-copy-list grep-mode-map))
 (define-key cscope-mode-map (kbd "<return>") #'cscope-goto-match)
 (define-key cscope-mode-map (kbd "C-o") nil)
 (define-key cscope-mode-map (kbd "C-q") #'quit-window)
 (define-key cscope-mode-map (kbd "e") #'cscope-entry)
+(define-key cscope-mode-map (kbd "f") #'cscope-filter-lines)
 (define-key cscope-mode-map (kbd "g") #'cscope-execute-query)
 (define-key cscope-mode-map (kbd "G") #'cscope-generate-database)
-(define-key cscope-mode-map (kbd "k") #'cscope-kill-current-error-buffer)
-(define-key cscope-mode-map (kbd "o") #'cscope-display-error)
-(define-key cscope-mode-map (kbd "q") #'cscope-quit-current-error)
+(define-key cscope-mode-map (kbd "k") #'cscope-kill-current-match-buffer)
+(define-key cscope-mode-map (kbd "K") #'cscope-kill-all)
+(define-key cscope-mode-map (kbd "o") #'cscope-display-match)
+(define-key cscope-mode-map (kbd "O") #'cscope-focus-on-current-match-window)
+(define-key cscope-mode-map (kbd "q") #'cscope-quit-current-match)
+(define-key cscope-mode-map (kbd "Q") #'cscope-quit-all)
 (define-key cscope-mode-map (kbd "t") #'cscope-toggle)
 (define-key cscope-mode-map (kbd "N") #'cscope-next-query)
 (define-key cscope-mode-map (kbd "P") #'cscope-previous-query)
