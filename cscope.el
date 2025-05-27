@@ -670,13 +670,24 @@ user to quickly navigate between different cscope result buffers."
 	(select-window window)
       (switch-to-buffer buffer))))
 
+(defun cscope-quit-buffer ()
+  "Quit the current cscope buffer.
+
+This provides a convenient way to dismiss cscope result windows."
+  (interactive)
+  (when-let ((buffer (cscope-find-buffer default-directory)))
+    (when-let ((window (get-buffer-window buffer)))
+      (with-selected-window window
+	(quit-window)))))
+
 (transient-define-prefix cscope-entry ()
   "Defines a transient menu cscope."
   ["Place holder"]
   ["Database"
    ("G" "Regenerate" cscope-generate-database)]
   ["Buffer(s)"
-   ("b" "Switch to a buffer" cscope-switch-to-buffer)]
+   ("b" "Switch to a cscope buffer" cscope-switch-to-buffer)
+   ("q" "Quit cscope buffer" cscope-quit-buffer)]
   (interactive)
   (transient-setup 'cscope-entry))
 
