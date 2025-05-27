@@ -445,9 +445,12 @@ cscope buffer by clearing it and displaying the search query."
 (defun cscope-query (&optional type thing)
   "Initiate a cscope search of TYPE for THING."
   (interactive)
-  (unless type
-    (setf type (completing-read
-		"Type: " (mapcar 'cadr cscope-search-types) nil t)))
+  (setf type (cond ((not type)
+		    (completing-read
+		     "Type: " (mapcar 'cadr cscope-search-types) nil t))
+		   ((numberp type)
+		    (car (assoc-default type cscope-search-types)))
+		   (type)))
   (unless thing
     (setf thing
 	  (cscope-read-string (concat (cscope-symbol-title type) ": "))))
@@ -468,6 +471,19 @@ cscope buffer by clearing it and displaying the search query."
 	  (cscope-generate-database)))
       (when (and cscope-process (process-live-p cscope-process))
 	(cscope-execute-query)))))
+
+(defun cscope-re-execute-query ()
+  "Re-execute the most recent cscope query.
+
+This function provides a mechanism to re-run the last cscope
+query. If called with a universal prefix argument (C-u), it will
+re-initiate the query using the same search type as the most
+recent one in `cscope-searches` but asks for a pattern to search
+for."
+  (interactive)
+  (if (equal current-prefix-arg '(4))
+      (cscope-query (caar cscope-searches))
+    (cscope-execute-query)))
 
 (defun cscope-previous-query (&optional n)
   "Execute a previous cscope query from the history.
@@ -801,7 +817,7 @@ of those that don't.  The buffer is modified in place."
 (define-key cscope-mode-map (kbd "C-o") nil)
 (define-key cscope-mode-map (kbd "e") #'cscope-entry)
 (define-key cscope-mode-map (kbd "f") #'cscope-filter-lines)
-(define-key cscope-mode-map (kbd "g") #'cscope-execute-query)
+(define-key cscope-mode-map (kbd "g") #'cscope-re-execute-query)
 (define-key cscope-mode-map (kbd "G") #'cscope-generate-database)
 (define-key cscope-mode-map (kbd "k") #'cscope-kill-current-match-buffer)
 (define-key cscope-mode-map (kbd "K") #'cscope-kill-all)
