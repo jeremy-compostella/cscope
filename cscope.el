@@ -270,8 +270,8 @@ to the new output chunk for correct parsing."
 			       :test (lambda (x y) (string-match y x))))))
       (with-temp-buffer
 	(insert context)
-	(let ((prog-mode-hook '()))
-	  (funcall mode))
+	(cl-letf (((symbol-function 'run-mode-hooks) #'ignore))
+          (funcall mode))
 	(font-lock-ensure (point-min) (point-max))
 	(goto-char (point-min))
 	(let ((pos (point-min))
