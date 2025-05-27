@@ -666,7 +666,9 @@ user to quickly navigate between different cscope result buffers."
 	 (buffer (if (and (boundp 'ido-mode) ido-mode)
 		     (ido-completing-read prompt buffers)
 		   (completing-read prompt buffers))))
-    (switch-to-buffer buffer)))
+    (if-let ((window (get-buffer-window buffer)))
+	(select-window window)
+      (switch-to-buffer buffer))))
 
 (transient-define-prefix cscope-entry ()
   "Defines a transient menu cscope."
