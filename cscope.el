@@ -544,6 +544,7 @@ results buffer based on the `cscope-show-function` setting."
 	(setf pos next)))))
 
 (defmacro for-all-cscope-match (&rest body)
+  "Execute BODY for each cscope match in the current buffer."
   (declare (indent 0))
   `(save-excursion
      (goto-char (point-min))
