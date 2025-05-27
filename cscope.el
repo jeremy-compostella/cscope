@@ -740,7 +740,7 @@ which buffer to refer to for displaying the error."
 	(quit-window)))))
 
 (defun cscope-quit-all ()
-  "Close all windows displaying cscope errors."
+  "Close all windows displaying cscope matches."
   (interactive)
   (for-all-cscope-match
     (cscope-quit-current-match)))
