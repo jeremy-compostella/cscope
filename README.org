@@ -96,7 +96,6 @@ Actions limited to the cscope buffer itself:
 - Use =g= to re-execute the current query.
 - Use =P= or =N= to execute the previous or the next search in the cscope buffer history.
 - Use =t= to open the display options menu (refer to the *Control Display* section below).
-- Use =C-q= to quit the cscope buffer window.
 
 Actions on the matching result and corresponding buffers or windows:
 

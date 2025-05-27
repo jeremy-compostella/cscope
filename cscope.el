@@ -799,7 +799,6 @@ of those that don't.  The buffer is modified in place."
 (defvar cscope-mode-map (cl-copy-list grep-mode-map))
 (define-key cscope-mode-map (kbd "<return>") #'cscope-goto-match)
 (define-key cscope-mode-map (kbd "C-o") nil)
-(define-key cscope-mode-map (kbd "C-q") #'quit-window)
 (define-key cscope-mode-map (kbd "e") #'cscope-entry)
 (define-key cscope-mode-map (kbd "f") #'cscope-filter-lines)
 (define-key cscope-mode-map (kbd "g") #'cscope-execute-query)
