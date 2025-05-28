@@ -51,6 +51,9 @@ with large result sets."
   "When non-nil, highlights the matching symbols in search results."
   :type 'boolean)
 
+(defcustom cscope-file-patterns '("*.[chsS]")
+  "List of file patterns to search for cscope database generation.")
+
 (defcustom cscope-search-types
   '((0 "find-this-C-symbol" ",")
     (1 "find-this-function-definition" ".")
@@ -158,16 +161,20 @@ STRING is the output from the process."
       (when cscope-searches
 	(cscope-execute-query)))))
 
-(defun cscope-generate-database-command ()
+(defun cscope-generate-database-command (&optional ignore-make)
   "Generate the command string to create the cscope database.
 
 If any root directory Makefile contains a reference to cscope, it
 assumes there is a cscope make target."
-  (if (= (shell-command "grep cscope Makefile*") 0)
+  (if (and (not ignore-make)
+	   (= (shell-command "grep cscope Makefile*") 0))
       "make cscope"
-    (let ((files "find . -name '*.[chsS]' > cscope.files")
-	  (database "cscope -b -q"))
-      (concat files "&&" database))))
+    (let ((find-params (mapconcat (lambda (p)
+				    (format " -name '%s' " p))
+				  cscope-file-patterns "-o"))
+	  (cscope-params "-b -q"))
+      (format "find . \\( %s \\) > cscope.files && cscope %s"
+	      find-params cscope-params))))
 
 (defun cscope-generate-database ()
   "Generate the cscope database in the current directory.

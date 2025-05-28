@@ -37,7 +37,7 @@ The cscope database is created automatically when you execute your first cscope 
 
 The database generation can be enforced by a direct call to the =cscope-generate-database= function. This generates the =cscope.out= database file.
 
-When a Makefile is present in the top-level directory, cscope looks for the presence of the word "cscope" in it. If it finds it, it assumes that there is a =cscope= make target and uses it. Otherwise, it uses the =find . -name '*.[chsS]' > cscope.files && cscope -b -q= shell command.
+When a Makefile exists in the top-level directory, cscope searches for the word "cscope" within it. If found, cscope assumes there is a =cscope= make target and utilizes it. If not found, it resorts to the find command to locate all files matching regular expressions from the customizable =cscope-file-patterns=. With the default =cscope-file-patterns=, the command is =find . ( -name '*.[chsS]' ) > cscope.files && cscope -b -q=.
 
 The =G= key can be used to regenerate a database from a cscope buffer.
 
@@ -49,16 +49,12 @@ You can customize this behavior by advising the =cscope-generate-database-comman
     "Include Makefile and Kconfig files, along with C source files,
   when the project is coreboot."
     (if (= (shell-command "grep coreboot .git/config") 0)
-        (let ((files (format "find . \\( %s \\) > cscope.files"
-                             (mapconcat (lambda (x) (format "-name '%s'" x))
-                                        '("*.[chsS]" "Makefile*" "Kconfig")
-                                        " -o ")))
-              (database "cscope -b -q"))
-          (concat files "&&" database))
-    (apply orig-fun args)))
+	(let ((cscope-file-patterns '("*.[chsS]" "Makefile*" "Kconfig")))
+	  (apply orig-fun (append '(t) (cdr args))))
+      (apply orig-fun args)))
 
   (advice-add 'cscope-generate-database-command
-              :around #'my-cscope-generate-database-command)
+	      :around #'my-cscope-generate-database-command)
 #+end_src
 
 *** Perform a Search
