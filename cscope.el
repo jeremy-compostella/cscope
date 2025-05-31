@@ -597,15 +597,10 @@ results buffer based on the `cscope-show-function` setting."
 	  (put-text-property pos next 'invisible invisible))
 	(setf pos next)))))
 
-(defmacro for-all-cscope-match (&rest body)
-  "Execute BODY for each cscope match in the current buffer."
-  (declare (indent 0))
-  `(save-excursion
-     (goto-char (point-min))
-     (forward-line 2)
-     (while (not (eobp))
-       (progn ,@body)
-       (forward-line))))
+(defun cscope-match-loc ()
+  "Return the compilation--loc structure of the current match."
+  (let ((err (compilation-next-error 0)))
+    (compilation--message->loc err)))
 
 (defun cscope-re-render-context ()
   "Re-render the code context lines with current settings.
@@ -615,13 +610,17 @@ the context lines in the cscope buffer, based on the current values
 of `cscope-fontify-code-line` and `cscope-highlight-match`.  It iterates
 through each result line and re-renders the context portion."
   (for-all-cscope-match
-    (let ((inhibit-read-only t))
-      (while (re-search-forward "\\(.*\\):[0-9]+:\\(.*:\\)?\\([a-zA-z_#\.].*\\)"
+    (let* ((inhibit-read-only t)
+	  (loc (cscope-match-loc))
+	  (file (caar (compilation--loc->file-struct loc)))
+	  (line (compilation--loc->line loc))
+	  (fun-rexp "[a-zA-Z0-9-_]+:"))
+      (while (re-search-forward (format "%s:%d:\\(%s\\)?\\(.*\\)"
+					file line fun-rexp)
 				(line-end-position) t)
-	(let ((context (match-string-no-properties 3)))
-	  (delete-region (match-beginning 3) (match-end 3))
-	  (cscope-insert-rendered-context (match-string-no-properties 1)
-					  context))))))
+	(let ((context (match-string-no-properties 2)))
+	  (delete-region (match-beginning 2) (match-end 2))
+	  (cscope-insert-rendered-context file context))))))
 
 (defun cscope-generate-toggle-functions ()
   "Create interactive toggle functions from `cscope-display-options'.
