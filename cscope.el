@@ -196,15 +196,21 @@ The `cscope-database-sentinel' function is set as the process sentinel
 to handle completion."
   (interactive)
   (with-current-buffer (cscope-find-buffer default-directory)
-    (let* ((process (start-file-process-shell-command
-		     "cscope" (current-buffer)
-		     (cscope-generate-database-command)))
+    (when-let ((process (get-buffer-process (current-buffer))))
+      (when (process-live-p process)
+	(kill-process process)))
+    (let* ((command (cscope-generate-database-command))
+	   (process (start-file-process-shell-command
+		     "cscope" (current-buffer) command))
 	   (progress (make-progress-reporter
 		      (format "Generating cscsope database for %s..."
 			      default-directory)))
 	   (timer-func (lexical-let ((progress progress))
 			 (apply-partially #'progress-reporter-update progress)))
 	   (timer (run-at-time .5 2 timer-func)))
+      (goto-char (point-max))
+      (let ((inhibit-read-only t))
+	(insert (format "Generating database using the '%s' command." command)))
       (set-process-sentinel
        process (apply-partially #'cscope-database-sentinel progress timer)))))
 
