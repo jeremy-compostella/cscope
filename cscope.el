@@ -97,6 +97,13 @@ This is used for displaying search types in menus and messages."
       (replace-match " "))
     (buffer-substring-no-properties (point-min) (point-max))))
 
+(defvar cscope-lock nil
+  "A lock variable used to prevent concurrent cscope searches.
+
+If non-nil, indicates that a cscope search is currently in
+progress, thus preventing initiation of additional searches until
+the current one completes.")
+
 (defvar cscope-history '()
   "History list for symbols queried by cscope search functions.")
 
@@ -348,6 +355,11 @@ Highlights the search symbol in the context."
 	  (cscope-insert-rendered-context file context)
 	  (insert "\n"))))))
 
+(defun cscope-is-busy ()
+  "Check if the current buffer cscope process is running and locked."
+  (when-let ((process (get-buffer-process (current-buffer))))
+    (and (eq (process-status process) 'run) cscope-lock)))
+
 (defun cscope-filter (process output)
   "Filter the output from the cscope process.
 Parses the output from the cscope process, extracts file, function,
@@ -382,6 +394,7 @@ indicate the status of the search."
       ;; End of data
       (when (re-search-forward "^>>" nil t)
 	(with-current-buffer buffer
+	  (setq cscope-lock nil)
 	  (let ((face (if (= cscope-num-matches-found 0)
 			  'compilation-mode-line-fail
 			'compilation-mode-line-exit)))
@@ -410,22 +423,34 @@ generates a human-readable string describing the search."
 	  (cdr search)))
 
 (defun cscope-execute-query ()
-  "Execute the most recent cscope query.
+  "Execute the most recent cscope query from `cscope-searches'.
 
-This function takes the most recent search query from `cscope-searches'
-and sends it to the running cscope process.  It first prepares the
-cscope buffer by clearing it and displaying the search query."
+This function retrieves the latest search query stored in
+`cscope-searches' and sends it to the active cscope process.
+Prior to executing the query, it ensures the cscope buffer is
+prepared by clearing its contents and displaying the search
+details. If the cscope process is not running or the database
+file 'cscope.out' is absent, it attempts to start the process or
+generate the database, respectively."
   (interactive)
-  (let ((search (car cscope-searches)))
-    (let ((inhibit-read-only t))
-      (erase-buffer)
-      (insert (cscope-search-message search) "\n\n"))
-    (setq mode-line-process
-	  '((:propertize ":run" face compilation-mode-line-run)
-            compilation-mode-line-errors)
-	  cscope-num-matches-found 0)
-    (process-send-string cscope-process (format "%d%s\n" (car search)
-						(cdr search)))))
+  (if (cscope-is-busy)
+      (message "A cscope search is in progress; retry later.")
+    (let ((search (car cscope-searches)))
+      (let ((inhibit-read-only t))
+	(erase-buffer)
+	(insert (cscope-search-message search) "\n\n"))
+      (setq mode-line-process
+	    '((:propertize ":run" face compilation-mode-line-run)
+              compilation-mode-line-errors)
+	    cscope-num-matches-found 0)
+      (unless (and cscope-process (process-live-p cscope-process))
+	(if (file-readable-p "cscope.out")
+	    (cscope-start-process)
+	  (cscope-generate-database)))
+      (when (and cscope-process (process-live-p cscope-process))
+	(setq cscope-lock t)
+	(process-send-string cscope-process (format "%d%s\n" (car search)
+						    (cdr search)))))))
 
 (defun cscope-point-within-code-context ()
   "Test if the current point is in a code line context."
@@ -452,31 +477,27 @@ cscope buffer by clearing it and displaying the search query."
 (defun cscope-query (&optional type thing)
   "Initiate a cscope search of TYPE for THING."
   (interactive)
-  (setf type (cond ((not type)
-		    (completing-read
-		     "Type: " (mapcar 'cadr cscope-search-types) nil t))
-		   ((numberp type)
-		    (car (assoc-default type cscope-search-types)))
-		   (type)))
-  (unless thing
-    (setf thing
-	  (cscope-read-string (concat (cscope-symbol-title type) ": "))))
-  (when (stringp type)
-    (setf type (car (cl-find type cscope-search-types
-			     :key #'cadr :test #'string=))))
-  (when (eq (cscope-find-buffer default-directory)
-	    (current-buffer))
+  (if (cscope-is-busy)
+      (message "A cscope search is in progress; retry later.")
+    (setf type (cond ((not type)
+		      (completing-read
+		       "Type: " (mapcar 'cadr cscope-search-types) nil t))
+		     ((numberp type)
+		      (car (assoc-default type cscope-search-types)))
+		     (type)))
+    (unless thing
+      (setf thing
+	    (cscope-read-string (concat (cscope-symbol-title type) ": "))))
+    (when (stringp type)
+      (setf type (car (cl-find type cscope-search-types
+			       :key #'cadr :test #'string=))))
+    (when (eq (cscope-find-buffer default-directory) (current-buffer))
       (setq cscope-inhibit-automatic-open t))
-  (with-current-buffer (cscope-find-buffer default-directory)
-    (let ((search (cons type thing)))
-      (setq cscope-searches (delete search cscope-searches)
-	    cscope-searches (push search cscope-searches)
-	    cscope-searches-backup (delete search cscope-searches-backup))
-      (unless (and cscope-process (process-live-p cscope-process))
-	(if (file-readable-p "cscope.out")
-	    (cscope-start-process)
-	  (cscope-generate-database)))
-      (when (and cscope-process (process-live-p cscope-process))
+    (with-current-buffer (cscope-find-buffer default-directory)
+      (let ((search (cons type thing)))
+	(setq cscope-searches (delete search cscope-searches)
+	      cscope-searches (push search cscope-searches)
+	      cscope-searches-backup (delete search cscope-searches-backup))
 	(cscope-execute-query)))))
 
 (defun cscope-re-execute-query ()
@@ -488,9 +509,11 @@ re-initiate the query using the same search type as the most
 recent one in `cscope-searches` but asks for a pattern to search
 for."
   (interactive)
-  (if (equal current-prefix-arg '(4))
-      (cscope-query (caar cscope-searches))
-    (cscope-execute-query)))
+  (if (cscope-is-busy)
+      (message "A cscope search is in progress; retry later.")
+    (if (equal current-prefix-arg '(4))
+	(cscope-query (caar cscope-searches))
+      (cscope-execute-query))))
 
 (defun cscope-previous-query (&optional n)
   "Execute a previous cscope query from the history.
@@ -504,23 +527,25 @@ The history is maintained in `cscope-searches' and
 `cscope-searches-backup'.  Queries are moved between these lists
 to navigate the history."
   (interactive)
-  (let* ((i 0)
-	 (n (or n 1)))
-    (let ((in (if (< n 0) 'cscope-searches-backup 'cscope-searches))
-	  (out (if (< n 0) 'cscope-searches 'cscope-searches-backup)))
-      (while (and (< i (abs n))
-		  (symbol-value in)
-		  (or (eq in 'cscope-searches-backup)
-		      (cdr cscope-searches)))
-	(set out (push (car (symbol-value in)) (symbol-value out)))
-	(set in (cdr (symbol-value in)))
-	(cl-incf i)))
-    (if (= i (abs n))
-	(progn
-	  (setq cscope-inhibit-automatic-open t)
-	  (cscope-execute-query))
-      (message (format "%s of search history."
-		       (if (< n 0) "End" "Beginning"))))))
+  (if (cscope-is-busy)
+      (message "A cscope search is in progress; retry later.")
+    (let* ((i 0)
+	   (n (or n 1)))
+      (let ((in (if (< n 0) 'cscope-searches-backup 'cscope-searches))
+	    (out (if (< n 0) 'cscope-searches 'cscope-searches-backup)))
+	(while (and (< i (abs n))
+		    (symbol-value in)
+		    (or (eq in 'cscope-searches-backup)
+			(cdr cscope-searches)))
+	  (set out (push (car (symbol-value in)) (symbol-value out)))
+	  (set in (cdr (symbol-value in)))
+	  (cl-incf i)))
+      (if (= i (abs n))
+	  (progn
+	    (setq cscope-inhibit-automatic-open t)
+	    (cscope-execute-query))
+	(message (format "%s of search history."
+			 (if (< n 0) "End" "Beginning")))))))
 
 (defun cscope-next-query (&optional n)
   "Execute a subsequent cscope query from the history (undoing previous).
