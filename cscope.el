@@ -414,7 +414,7 @@ indicate the status of the search."
 		(let ((next-error-found-function #'next-error-quit-window)
 		      (current-prefix-arg 0))
 		  (next-error))
-	      (select-window (get-buffer-window (current-buffer)))
+	      (select-window (get-buffer-window buffer))
 	      (goto-char (point-min))
 	      (forward-line 2))
 	    (setq cscope-inhibit-automatic-open nil)))))))
