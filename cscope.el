@@ -656,14 +656,14 @@ options on or off within the cscope interface."
 
 The actions are built out of the `cscope-search-types'
 customizable variable."
-  (let ((vec (make-vector (1+ (length cscope-search-types)) "Cscope Actions:")))
-    (let ((i 1))
-      (dolist (type cscope-search-types)
-	(setf (aref vec i)
-	      (list (caddr type)
-		    (cscope-symbol-title (cadr type))
-		    (intern (concat "cscope-" (cadr type)))))
-	(cl-incf i)))
+  (let ((vec (make-vector (1+ (length cscope-search-types)) "Cscope Actions:"))
+	(i 1))
+    (dolist (type cscope-search-types)
+      (setf (aref vec i)
+	    (list (caddr type)
+		  (cscope-symbol-title (cadr type))
+		  (intern (concat "cscope-" (cadr type)))))
+      (cl-incf i))
     vec))
 
 (defun cscope-generate-toggle-actions ()
