@@ -790,8 +790,7 @@ which buffer to refer to for displaying the error."
 
 (defun cscope-current-match-buffer ()
   "Return the buffer associated with the current match."
-  (let* ((err (compilation-next-error 0))
-	 (loc (compilation--message->loc err))
+  (let* ((loc (cscope-match-loc))
 	 (file (caar (compilation--loc->file-struct loc)))
 	 (path (concat (expand-file-name
 			(concat default-directory "/" file)))))
