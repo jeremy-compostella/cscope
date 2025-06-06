@@ -49,7 +49,7 @@ You can customize this behavior by advising the =cscope-generate-database-comman
     "Include Makefile and Kconfig files, along with C source files,
   when the project is coreboot."
     (if (= (shell-command "grep coreboot .git/config") 0)
-	(let ((cscope-file-patterns '("*.[chsS]" "Makefile*" "Kconfig")))
+	(let ((cscope-file-patterns '("*.[chsS]" "Makefile*" "Kconfig" "*.cb")))
 	  (apply orig-fun (append '(t) (cdr args))))
       (apply orig-fun args)))
 
