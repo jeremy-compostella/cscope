@@ -470,6 +470,24 @@ Highlights the search symbol in the context."
   (when-let ((process (get-buffer-process (current-buffer))))
     (and (eq (process-status process) 'run) cscope-lock)))
 
+(defun cscope-print-help ()
+  "Display helpful keybindings in the minibuffer."
+  (interactive)
+  (let ((keys '((next-error-no-select . "next match")
+		(previous-error-no-select . "previous match")
+		(compilation-next-file . "next file")
+		(compilation-previous-file . "previous file")))
+	(previous-query '((cscope-previous-query . "previous cscope query")))
+	(next-query '((cscope-next-query . "next cscope query"))))
+    (when (cdr cscope-searches)
+      (setf keys (append keys previous-query)))
+    (when cscope-searches-backup
+      (setf keys (append keys next-query)))
+    (cl-flet ((format-key (key)
+		(format "\\[%s] for %s" (symbol-name (car key)) (cdr key))))
+      (message "Hit %s."
+	       (substitute-command-keys (mapconcat #'format-key keys ", "))))))
+
 (defun cscope-filter (process output)
   "Filter the output from the cscope process.
 Parses the output from the cscope process, extracts file, function,
@@ -520,7 +538,8 @@ indicate the status of the search."
 		  (next-error))
 	      (select-window (get-buffer-window buffer))
 	      (goto-char (point-min))
-	      (forward-line 2))
+	      (forward-line 2)
+	      (cscope-print-help))
 	    (setq cscope-inhibit-automatic-open nil)))))))
 
 (defun cscope-search-message (search)
