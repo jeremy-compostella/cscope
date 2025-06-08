@@ -500,7 +500,7 @@ indicate the status of the search."
       (insert output)
       (goto-char (point-min))
       ;; Parse results
-      (let* ((rpath "\\([a-DA-Z0-9_<>/\.]+\\)")
+      (let* ((rpath "\\([a-DA-Z0-9_<>/\.\-]+\\)")
 	     (rfunction "\\([a-DA-Z0-9_<>]+\\)")
 	     (rnumber "\\([0-9]+\\)")
 	     (regexp (format "^%s %s %s \\(.*\\)$" rpath rfunction rnumber)))
