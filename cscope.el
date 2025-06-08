@@ -976,6 +976,13 @@ after jumping to the error."
     (compile-goto-error)))
 
 (defmacro cscope-on-match (&rest body)
+  "Execute BODY only when the current buffer is in `cscope-mode'.
+
+This macro checks if the current buffer's major mode is
+`cscope-mode'. If it is, it sets `next-error-last-buffer' to the
+current buffer and then executes the code provided in BODY. It
+ensures that navigation commands like `next-error' operate
+correctly within that context."
   (declare (indent 0))
   `(when (eq major-mode 'cscope-mode)
      (setq next-error-last-buffer (current-buffer))
@@ -1049,6 +1056,7 @@ remove filters to reveal more results."
     (kill-buffer buffer)))
 
 (defun cscope-kill-all ()
+  "Kill all buffers displaying cscope matches."
   (interactive)
   (for-all-cscope-match
     (cscope-kill-current-match-buffer)))
