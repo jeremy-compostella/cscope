@@ -80,6 +80,16 @@ Each element is a list of the form (VARIABLE KEY), where:
 - KEY is the character used to toggle the option in the transient menu."
   :type 'alist)
 
+(defcustom cscope-persistent-filters nil
+  "Whether filters persist between queries in the same buffer.
+
+When non-nil, filters applied to a cscope results buffer will
+remain active even when running new queries in that buffer.
+
+When nil, filters are cleared each time a new query is executed,
+starting with a fresh, unfiltered result set."
+  :type 'boolean)
+
 (defun cscope-symbol-title (symbol)
   "Generate a user-friendly title from a symbol or symbol string.
 
@@ -109,6 +119,9 @@ the current one completes.")
 
 (defvar cscope-filter-history '()
   "History list for filter regular expressions.")
+
+(defvar-local cscope-filters '()
+  "List of filters applied to the cscope results buffer.")
 
 (defvar-local cscope-process nil
   "Process object for the running cscope command.")
@@ -183,6 +196,11 @@ assumes there is a cscope make target."
       (format "find . \\( %s \\) > cscope.files && cscope %s"
 	      find-params cscope-params))))
 
+(defmacro with-cscope-buffer (&rest body)
+  (declare (indent 0))
+  `(with-current-buffer (cscope-find-buffer default-directory)
+     (progn ,@body)))
+
 (defun cscope-generate-database ()
   "Generate the cscope database in the current directory.
 This function creates a 'cscope.files' file containing a list of C,
@@ -195,7 +213,7 @@ A `progress-reporter' is used to show the generation status in the echo area.
 The `cscope-database-sentinel' function is set as the process sentinel
 to handle completion."
   (interactive)
-  (with-current-buffer (cscope-find-buffer default-directory)
+  (with-cscope-buffer
     (when-let ((process (get-buffer-process (current-buffer))))
       (when (process-live-p process)
 	(kill-process process)))
@@ -322,7 +340,78 @@ on customizable variables."
 	  (overlay-put ol 'face 'highlight)))))
   (goto-char (line-end-position)))
 
-(defun cscope-insert-result (buffer file function line context)
+(defun cscope-hide-match (regexp)
+  "Hide the current match in the cscope buffer.
+
+This function hides the current line by setting the `invisible'
+text property.  The REGEXP is stored in the 'invisible' text
+property, allowing the line to be unhidden later."
+  (let ((begin (1- (line-beginning-position)))
+        (end (line-end-position))
+        (inhibit-read-only t))
+    (put-text-property begin end 'invisible regexp)
+    (remove-overlays begin end 'face 'highlight)))
+
+(defun cscope-show-match ()
+  "Show the current match in the cscope buffer."
+  (let ((pos (1- (line-beginning-position)))
+	(end (line-end-position))
+	(inhibit-read-only t)
+	next)
+    (remove-text-properties pos end '(invisible nil))
+    ;; Set-up invisible property according to `cscope-show-function'
+    (while (and (setf next (next-property-change pos)) (< next end))
+      (let ((props (text-properties-at pos)))
+	(when (memq 'cscope-function props)
+	  (put-text-property pos next 'invisible (not cscope-show-function))))
+      (setf pos next))
+    ;; Render the context according to `cscope-highlight-match' and
+    ;; `cscope-fontify-code-line'
+    (let* ((loc (cscope-match-loc))
+	   (file (caar (compilation--loc->file-struct loc)))
+	   (line (compilation--loc->line loc))
+	   (fun-rexp "[a-zA-Z0-9-_]+:"))
+      (while (re-search-forward (format "%s:%d:\\(%s\\)?\\(.*\\)"
+					file line fun-rexp)
+				(line-end-position) t)
+	(let ((context (match-string-no-properties 2)))
+	  (delete-region (match-beginning 2) (match-end 2))
+	  (cscope-insert-rendered-context file context))))))
+
+(defun cscope-invisible-match ()
+  "Check if the current line is marked as invisible by a filter.
+
+Returns the regular expression used to hide the line, if the line has
+been marked as invisible by `cscope-hide-match'. Returns nil otherwise."
+    (get-text-property (line-beginning-position) 'invisible))
+
+(defun cscope-should-hide-match (regexp)
+  "Return whether the current line should be hidden based on REGEXP.
+
+If the 'cscope-filter-out' text property is set for REGEXP, this
+function returns t if REGEXP is found in the current
+line (meaning the line should be hidden because it matches the
+exclusion pattern).
+
+If 'cscope-filter-out' is not set, it returns t if REGEXP is not
+found in the current line (meaning the line should be hidden
+because it doesn't match the inclusion pattern)."
+  (save-excursion
+    (if (get-text-property 0 'cscope-filter-out regexp)
+	(re-search-forward regexp (line-end-position) t)
+      (not (re-search-forward regexp (line-end-position) t)))))
+
+(defun cscope-filter-match ()
+  (if-let* ((reasons (delq nil (mapcar #'cscope-should-hide-match
+				       cscope-filters)))
+	    (regexp (car reasons)))
+      (progn
+	(cscope-hide-match regexp)
+	nil)
+    (cscope-show-match)
+    t))
+
+(defun cscope-insert-match (buffer file function line context)
   "Insert a cscope search result into BUFFER.
 
 The result is formatted as 'file:line: context\\n'.
@@ -336,7 +425,8 @@ Highlights the search symbol in the context."
     (when (= cscope-num-matches-found 2)
       (display-buffer (current-buffer)))
     (when (and cscope-fontify-code-line
-	       (= cscope-num-matches-found cscope-highlight-and-font-line-limit))
+	       (= cscope-num-matches-found
+		  cscope-highlight-and-font-line-limit))
       (message "Fontification limit reached, disabling fontification."))
     (let* ((inhibit-read-only t)
 	   (below-limit (< cscope-num-matches-found
@@ -356,10 +446,24 @@ Highlights the search symbol in the context."
 					  'font-lock-face
 					  'font-lock-function-name-face)
 			      ":")
+		      'cscope-function t
 		      'invisible (not cscope-show-function)))))
-          (insert (format "%s:%s:%s" file line fun))
-	  (cscope-insert-rendered-context file context)
-	  (insert "\n"))))))
+          (insert (format "%s:%s:%s%s\n" file line fun context))
+	  (save-excursion
+	    (forward-line -1)
+	    (unless (cscope-filter-match)
+	      (cl-decf cscope-num-matches-found))))))))
+
+(defmacro for-all-cscope-match (&rest body)
+  "Execute BODY for each cscope match in the current buffer."
+  (declare (indent 0))
+  `(with-cscope-buffer
+     (save-excursion
+       (goto-char (point-min))
+       (forward-line 2)
+       (while (not (eobp))
+	 (progn ,@body)
+	 (forward-line)))))
 
 (defun cscope-is-busy ()
   "Check if the current buffer cscope process is running and locked."
@@ -389,9 +493,9 @@ indicate the status of the search."
 		  (function (match-string  2))
 		  (line (string-to-number (match-string 3)))
 		  (context (match-string 4)))
-	      (cscope-insert-result buffer
-				    (match-string 1) (match-string 2)
-				    (match-string 3) (match-string 4)))))
+	      (cscope-insert-match buffer
+				   (match-string 1) (match-string 2)
+				   (match-string 3) (match-string 4)))))
 	(unless (= (point) (point-max))
 	  (forward-char))
 	(when (and (= (point) (line-beginning-position))
@@ -428,6 +532,22 @@ generates a human-readable string describing the search."
 	   (car (assoc-default (car search) cscope-search-types)))
 	  (cdr search)))
 
+(defun cscope-print-filters ()
+  "Display the active filters in the cscope buffer's header line."
+  (cl-flet ((filter-string (regexp)
+	      (concat (if (get-text-property 0 'cscope-filter-out regexp)
+			  "!" "")
+		      (propertize regexp 'font-lock-face 'match))))
+    (save-excursion
+      (goto-char (point-min))
+      (forward-line)
+      (let ((inhibit-read-only t))
+	(delete-region (line-beginning-position) (line-end-position))
+	(when cscope-filters
+	  (insert (format "Filters: %s"
+			  (mapconcat #'filter-string
+				     cscope-filters ", "))))))))
+
 (defun cscope-execute-query ()
   "Execute the most recent cscope query from `cscope-searches'.
 
@@ -454,6 +574,7 @@ generate the database, respectively."
 	    (cscope-start-process)
 	  (cscope-generate-database)))
       (when (and cscope-process (process-live-p cscope-process))
+	(cscope-print-filters)
 	(setq cscope-lock t)
 	(process-send-string cscope-process (format "%d%s\n" (car search)
 						    (cdr search)))))))
@@ -481,30 +602,74 @@ generate the database, respectively."
     (read-string prompt initial 'cscope-history)))
 
 (defun cscope-query (&optional type thing)
-  "Initiate a cscope search of TYPE for THING."
+  "Initiate a cscope search of TYPE for THING.
+
+This function initiates a cscope search for a given type and symbol.
+It handles reading the symbol from the minibuffer, determining the
+cscope buffer, applying filters (including those specified via the
+transient menu), and executing the cscope query.
+
+TYPE: The type of cscope search (e.g., find-this-C-symbol). If not
+provided, the user is prompted to select a type from a list.
+
+THING: The symbol or string to search for. If not provided, the user
+is prompted to enter a symbol or string in the minibuffer.
+
+Filters are applied based on the following:
+
+- The 'cscope-persistent-filters' variable determines whether filters
+  persist between queries. If nil, filters are cleared before each
+  new query.
+
+- The transient menu ('cscope-entry') allows specifying include and
+  exclude filters using regular expressions.
+
+- The 'limit-to-subdir' option in the transient menu limits the
+  search to the current subdirectory."
   (interactive)
-  (if (cscope-is-busy)
-      (message "A cscope search is in progress; retry later.")
-    (setf type (cond ((not type)
-		      (completing-read
-		       "Type: " (mapcar 'cadr cscope-search-types) nil t))
-		     ((numberp type)
-		      (car (assoc-default type cscope-search-types)))
-		     (type)))
-    (unless thing
-      (setf thing
-	    (cscope-read-string (concat (cscope-symbol-title type) ": "))))
-    (when (stringp type)
-      (setf type (car (cl-find type cscope-search-types
-			       :key #'cadr :test #'string=))))
-    (when (eq (cscope-find-buffer default-directory) (current-buffer))
-      (setq cscope-inhibit-automatic-open t))
-    (with-current-buffer (cscope-find-buffer default-directory)
-      (let ((search (cons type thing)))
-	(setq cscope-searches (delete search cscope-searches)
-	      cscope-searches (push search cscope-searches)
-	      cscope-searches-backup (delete search cscope-searches-backup))
-	(cscope-execute-query)))))
+  (cl-flet ((push-filter (buffer regexp)
+	      (with-current-buffer buffer
+		(add-to-list 'cscope-filters regexp t))))
+    (if (cscope-is-busy)
+	(message "A cscope search is in progress; retry later.")
+      (setf type (cond ((not type)
+			(completing-read
+			 "Type: " (mapcar 'cadr cscope-search-types) nil t))
+		       ((numberp type)
+			(car (assoc-default type cscope-search-types)))
+		       (type)))
+      (unless thing
+	(setf thing
+	      (cscope-read-string (concat (cscope-symbol-title type) ": "))))
+      (when (stringp type)
+	(setf type (car (cl-find type cscope-search-types
+				 :key #'cadr :test #'string=))))
+      (let ((cscope-buffer (cscope-find-buffer default-directory))
+	    (args (transient-args 'cscope-entry)))
+	(unless cscope-persistent-filters
+	  (with-current-buffer cscope-buffer
+	    (setq cscope-filters '())))
+	(when (eq cscope-buffer (current-buffer))
+	  (setq cscope-inhibit-automatic-open t))
+	(when-let ((filter-in (transient-arg-value "filter-in=" args)))
+	  (push-filter cscope-buffer filter-in))
+	(when-let ((filter-out (transient-arg-value "filter-out=" args)))
+	  (push-filter cscope-buffer (propertize filter-out
+						 'cscope-filter-out t)))
+	(when (member "limit-to-subdir" args)
+	  (let* ((cscope-directory (with-current-buffer cscope-buffer
+				     default-directory))
+		 (length (length cscope-directory))
+		 (directory (expand-file-name default-directory)))
+	    (when (string-prefix-p cscope-directory directory)
+	      (push-filter cscope-buffer
+			   (concat "^" (substring directory (1+ length)))))))
+	(with-current-buffer cscope-buffer
+	  (let ((search (cons type thing)))
+	    (setq cscope-searches (delete search cscope-searches)
+		  cscope-searches (push search cscope-searches)
+		  cscope-searches-backup (delete search cscope-searches-backup))
+	    (cscope-execute-query)))))))
 
 (defun cscope-re-execute-query ()
   "Re-execute the most recent cscope query.
@@ -549,6 +714,8 @@ to navigate the history."
       (if (= i (abs n))
 	  (progn
 	    (setq cscope-inhibit-automatic-open t)
+	    (unless cscope-persistent-filters
+	      (setq cscope-filters '()))
 	    (cscope-execute-query))
 	(message (format "%s of search history."
 			 (if (< n 0) "End" "Beginning")))))))
@@ -581,46 +748,47 @@ Emacs commands."
               (interactive)
               (cscope-query (cadr feature) nil))))))
 
-(defun cscope-toggle-invisible-property (invisible)
-  "Toggle the 'invisible' text property on the current buffer.
-
-This function iterates through all text properties in the current
-buffer and toggles the 'invisible' property on those that already
-have it.  This is used to show/hide function names in the cscope
-results buffer based on the `cscope-show-function` setting."
-  (save-excursion
-    (let ((pos (point-min))
-	  (inhibit-read-only t)
-	  next)
-      (while (setf next (next-property-change pos))
-	(when (memq 'invisible (text-properties-at pos))
-	  (put-text-property pos next 'invisible invisible))
-	(setf pos next)))))
-
 (defun cscope-match-loc ()
   "Return the compilation--loc structure of the current match."
   (let ((err (compilation-next-error 0)))
     (compilation--message->loc err)))
 
-(defun cscope-re-render-context ()
-  "Re-render the code context lines with current settings.
+(defun cscope-refresh (&optional visible)
+  "Refreshes the cscope buffer, reapplying filters and highlighting.
 
-This function re-applies syntax highlighting and match highlighting to
-the context lines in the cscope buffer, based on the current values
-of `cscope-fontify-code-line` and `cscope-highlight-match`.  It iterates
-through each result line and re-renders the context portion."
-  (for-all-cscope-match
-    (let* ((inhibit-read-only t)
-	  (loc (cscope-match-loc))
-	  (file (caar (compilation--loc->file-struct loc)))
-	  (line (compilation--loc->line loc))
-	  (fun-rexp "[a-zA-Z0-9-_]+:"))
-      (while (re-search-forward (format "%s:%d:\\(%s\\)?\\(.*\\)"
-					file line fun-rexp)
-				(line-end-position) t)
-	(let ((context (match-string-no-properties 2)))
-	  (delete-region (match-beginning 2) (match-end 2))
-	  (cscope-insert-rendered-context file context))))))
+This function iterates through each match in the cscope buffer,
+re-evaluating filters and reapplying syntax highlighting and
+match highlighting based on current settings.  It also manages
+the `cscope-num-matches-found' counter and displays a progress
+reporter for large buffers.
+
+VISIBLE: If non-nil, only refresh visible matches (those not
+already filtered out).  This can improve performance when only
+updating the display."
+  (let* ((line-count (line-number-at-pos (point-max)))
+	 progress)
+    (setq cscope-num-matches-found 0)
+    (for-all-cscope-match
+      (unless (and visible (cscope-invisible-match))
+        (when (and cscope-fontify-code-line
+                   (= cscope-num-matches-found
+		      cscope-highlight-and-font-line-limit))
+          (message "Fontification limit reached, disabling fontification."))
+        (let* ((below-limit (< cscope-num-matches-found
+			       cscope-highlight-and-font-line-limit))
+	       (cscope-fontify-code-line (and below-limit
+					      cscope-fontify-code-line))
+	       (cscope-highlight-match (and below-limit
+					    cscope-highlight-match)))
+          (unless below-limit
+            (unless progress
+	      (setf progress (make-progress-reporter "Refreshing cscope buffer"
+                                                     0 line-count)))
+            (progress-reporter-update progress (line-number-at-pos)))
+          (when (cscope-filter-match)
+            (cl-incf cscope-num-matches-found)))))
+    (when progress
+      (progress-reporter-done progress))))
 
 (defun cscope-generate-toggle-functions ()
   "Create interactive toggle functions from `cscope-display-options'.
@@ -639,20 +807,14 @@ options on or off within the cscope interface."
 		  (interactive)
 		  (make-local-variable var)
 		  (set var (not (symbol-value var)))
-		  (cond ((string= name "cscope-show-function")
-			 (cscope-toggle-invisible-property
-			  (not cscope-show-function)))
-			((or (string= name "cscope-highlight-match")
-			     (string= name "cscope-fontify-code-line"))
-			 (cscope-re-render-context))
-			((cscope-execute-query)))
+		  (cscope-refresh t)
 		  (message (format "%s %s" (cscope-symbol-title var)
 				   (if (symbol-value var)
 				       "enabled."
 				     "disabled."))))))))))
 
 (defun cscope-generate-entry-actions ()
-    "Create cscope actions for the `cscope-entry' menu.
+  "Create cscope actions for the `cscope-entry' menu.
 
 The actions are built out of the `cscope-search-types'
 customizable variable."
@@ -688,7 +850,7 @@ customizable variable."
 functions, and transient menu actions."
   (cscope-generate-search-functions)
   (cscope-generate-toggle-functions)
-  (transient-replace-suffix 'cscope-entry '(0)
+  (transient-replace-suffix 'cscope-entry '(1)
     (cscope-generate-entry-actions))
   (transient-replace-suffix 'cscope-toggle '(0)
     (cscope-generate-toggle-actions)))
@@ -733,8 +895,28 @@ This provides a convenient way to dismiss cscope result windows."
       (with-selected-window window
 	(quit-window)))))
 
+(transient-define-argument cscope-transient-read-filter ()
+  "Define a transient argument for filtering cscope results by regexp."
+  :description "Filter results by regular expression"
+  :class 'transient-option
+  :argument "filter-in="
+  :allow-empty t
+  :reader #'read-string)
+
+(transient-define-argument cscope-transient-read-filter-out ()
+  "Define a transient argument for filtering cscope results by regexp."
+  :description "Filter OUT results by regular expression"
+  :class 'transient-option
+  :argument "filter-out="
+  :allow-empty t
+  :reader #'read-string)
+
 (transient-define-prefix cscope-entry ()
   "Defines a transient menu cscope."
+  ["Filters Options:"
+   ("-s" "Limit results to current sub-directory" ("-s" "limit-to-subdir"))
+   ("-i" cscope-transient-read-filter)
+   ("-o" cscope-transient-read-filter-out)]
   ["Place holder"]
   ["Database"
    ("G" "Regenerate" cscope-generate-database)]
@@ -811,6 +993,26 @@ which buffer to refer to for displaying the error."
   (for-all-cscope-match
     (cscope-quit-current-match)))
 
+(defun cscope-filter-matches ()
+  "Refreshes the cscope buffer, reapplying filters and highlighting."
+  (cscope-print-filters)
+  (cscope-refresh))
+
+(defun cscope-pop-filter ()
+  "Remove the most recently applied filter from the cscope buffer.
+
+This function removes the last filter that was applied to the cscope
+results buffer, effectively undoing the last filtering operation. It
+then refreshes the buffer to re-evaluate the remaining filters and
+update the display accordingly. This allows users to progressively
+remove filters to reveal more results."
+  (interactive)
+  (with-cscope-buffer
+    (when cscope-filters
+      (let ((regexp (car (last cscope-filters))))
+	(setq cscope-filters (delete regexp cscope-filters))
+	(cscope-filter-matches)))))
+
 (defun cscope-kill-current-match-buffer ()
   "Kill the buffer of the current error."
   (interactive)
@@ -837,22 +1039,21 @@ of those that don't.  The buffer is modified in place."
 					      " out"
 					    ""))
 				  nil 'cscope-filter-history)))
-  (save-excursion
-    (goto-char (point-min))
-    (forward-line)
-    (let ((inhibit-read-only t))
-      (delete-region (line-beginning-position) (line-end-position))
-      (insert (propertize "(Filtered)" 'font-lock-face 'italic))
-      (forward-line)
-      (if current-prefix-arg
-	  (delete-matching-lines regexp)
-	(delete-non-matching-lines regexp)))))
+  (with-cscope-buffer
+    (let ((elem (propertize regexp
+			    'cscope-filter-out current-prefix-arg)))
+      (add-to-list 'cscope-filters elem t))
+    (cscope-filter-matches)
+    (message (concat (propertize regexp 'face 'match)
+		     (substitute-command-keys " filter applied, pop filters\
+ using the \\[cscope-pop-filter] key.")))))
 
 (defvar cscope-mode-map (cl-copy-list grep-mode-map))
 (define-key cscope-mode-map (kbd "<return>") #'cscope-goto-match)
 (define-key cscope-mode-map (kbd "C-o") nil)
 (define-key cscope-mode-map (kbd "e") #'cscope-entry)
 (define-key cscope-mode-map (kbd "f") #'cscope-filter-lines)
+(define-key cscope-mode-map (kbd "F") #'cscope-pop-filter)
 (define-key cscope-mode-map (kbd "g") #'cscope-re-execute-query)
 (define-key cscope-mode-map (kbd "G") #'cscope-generate-database)
 (define-key cscope-mode-map (kbd "k") #'cscope-kill-current-match-buffer)
@@ -864,6 +1065,64 @@ of those that don't.  The buffer is modified in place."
 (define-key cscope-mode-map (kbd "t") #'cscope-toggle)
 (define-key cscope-mode-map (kbd "N") #'cscope-next-query)
 (define-key cscope-mode-map (kbd "P") #'cscope-previous-query)
+
+(defun cscope-first-error-position ()
+  "Return the position of the first visible cscope match in the buffer.
+
+This function searches from the beginning of the cscope results buffer
+(after the header lines) and returns the position of the first line
+that is not marked as invisible by a filter.  If all lines are filtered
+out, it returns the end of the buffer."
+  (save-excursion
+    (goto-char (point-min))
+    (forward-line 2)
+    (while (and (not (eobp)) (cscope-invisible-match))
+      (forward-line))
+    (point)))
+
+(defun cscope-last-error-position ()
+  "Return the position of the last visible cscope match in the buffer.
+
+This function searches backward from the end of the cscope results
+buffer and returns the position of the last line that is not marked
+as invisible by a filter.  If all lines are filtered out, it returns
+the beginning of the buffer (after the header lines)."
+  (save-excursion
+    (goto-char (point-max))
+    (forward-line -1)
+    (while (and (not (= 2 (line-number-at-pos))) (cscope-invisible-match))
+      (forward-line -1))
+    (point)))
+
+(defun cscope-next-error-function (arg &optional reset)
+  "Navigate to the next or previous visible cscope match.
+
+ARG is a number indicating how many matches to move forward (positive)
+or backward (negative).
+
+RESET, if non-nil, forces the navigation to start from the first
+visible match in the buffer.
+
+This function respects filters applied to the cscope buffer, only
+stopping at lines that are not marked as invisible."
+  (with-cscope-buffer
+    (when reset
+      (goto-char (cscope-first-error-position)))
+    (let ((inc (if (> arg 0) 1 -1))
+	  (limit (if (> arg 0)
+		     (cscope-last-error-position)
+		   (cscope-first-error-position))))
+      (let ((i 0))
+	(while (and (not (= (point) limit))
+		    (< i (abs arg)))
+	  (forward-line inc)
+	  (unless (cscope-invisible-match)
+	    (cl-incf i))))
+      (let ((cmp (if (> arg 0) '> '<)))
+	(when (funcall cmp (point) limit)
+	  (goto-char limit))))
+    (setq compilation-current-error (point-marker)))
+  (compilation-next-error-function 0))
 
 ;;;###autoload
 (define-compilation-mode cscope-mode "Cscope"
@@ -879,7 +1138,8 @@ results. The mode line displays the number of matches found."
 		     " " ,@(cscope-generate-toggle-mode-line) "]")))
     (setq-local compilation-error-regexp-alist grep-regexp-alist
 		compilation-error-face grep-hit-face
-		compilation-mode-line-errors mode-line)
+		compilation-mode-line-errors mode-line
+		next-error-function #'cscope-next-error-function)
     (cscope--init)))
 
 ;; Make sure function and menu are initialized on load

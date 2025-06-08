@@ -100,14 +100,25 @@ Actions on the matching result and corresponding buffers or windows:
 
 Since =cscope-mode= is derived from =compilation-mode=, =M-x next-error= and =M-x error-function= can be used to browse the results outside of the cscope buffer.
 *** Filter Results
-The =M-x cscope-filter-lines= command provides the main way to filter lines within the cscope results buffer using a regular expression. In =cscope-mode=, this command is bound to the =f= key.
+These filtering features allow you to refine your cscope search results by including or excluding lines based on regular expressions or limiting searches to subdirectories. Filters operate on the results displayed in the cscope buffer.
 
-- Without a prefix argument (default): The command /includes/ only the lines that /match/ the specified regular expression, deleting all other lines.
-- With a prefix argument (e.g., =C-u f=): The command /excludes/ the lines that /match/ the specified regular expression, deleting them from the buffer.
+There are several ways to filter cscope results:
 
-**** Important Considerations
-- =cscope-filter-lines= modifies the cscope results buffer directly. The deleted lines are gone. To restore them, you can re-execute the query with =g= or =M-x cscope-execute-query=.
-- The =regexp= you enter must be a valid Emacs regular expression. You can use features like character classes (=[a-z]=) and quantifiers (=*=, =+=, =?=) in your regular expressions.
+1. *Include Filters:* Only show lines that /match/ a specified regular expression.
+2. *Exclude Filters:* Hide lines that /match/ a specified regular expression.
+3. *Subdirectory Filter:* Limit results to the current subdirectory. This is a shortcut to an Include filter based on the current directory from where the cscope search request was initiated.
+
+Filters can be applied using the =cscope-entry= transient menu or directly from the cscope buffer with the =f= key to filter in or =C-u f= to filter out (=M-x cscope-filter-lines=).
+
+*Filter Behavior:*
+
+- Filters are applied cumulatively. This means that if you apply multiple filters, a line must satisfy all include filters and /not/ satisfy any exclude filters to be displayed.
+- Filters are applied to the entire line of the cscope result, including the file name, line number, function name (if displayed), and code context.
+- Filters persist between re-executions of the same query in the same buffer.
+- Filters do not persist across new queries or history browsing unless the =cscope-persistent-filters= customizable variable is set to =t=.
+- The applied filters are displayed in the header line of the cscope results buffer.
+
+You can remove filters using the =M-x cscope-pop-filter= command or by pressing =F= in the cscope buffer. This removes the /last/ filter that was applied. Repeatedly calling this command will remove filters in reverse order of application.
 *** Control the Display Options
 This Emacs module provides display options to customize how cscope search results appear. Access these options via the toggle menu, activated by pressing =t=. The following display options are available:
 
