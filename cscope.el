@@ -675,11 +675,13 @@ Filters are applied based on the following:
 	(when-let ((filter-out (transient-arg-value "filter-out=" args)))
 	  (push-filter cscope-buffer (propertize filter-out
 						 'cscope-filter-out t)))
-	(when (member "limit-to-subdir" args)
+	(when-let ((directory (or (transient-arg-value "limit-to-subdir=" args)
+				  (when (member "limit-to-subdir" args)
+				    (default-directory)))))
+	  (setf directory (expand-file-name directory))
 	  (let* ((cscope-directory (with-current-buffer cscope-buffer
 				     default-directory))
-		 (length (length cscope-directory))
-		 (directory (expand-file-name default-directory)))
+		 (length (length cscope-directory)))
 	    (when (string-prefix-p cscope-directory directory)
 	      (push-filter cscope-buffer
 			   (concat "^" (substring directory (1+ length)))))))
@@ -914,6 +916,13 @@ This provides a convenient way to dismiss cscope result windows."
       (with-selected-window window
 	(quit-window)))))
 
+(transient-define-argument cscope-transient-read-directory ()
+  :description "Limit matches to a specific directory"
+  :class 'transient-option
+  :argument "limit-to-subdir="
+  :allow-empty t
+  :reader #'transient-read-directory)
+
 (transient-define-argument cscope-transient-read-filter ()
   "Define a transient argument for filtering cscope results by regexp."
   :description "Filter results by regular expression"
@@ -934,6 +943,7 @@ This provides a convenient way to dismiss cscope result windows."
   "Defines a transient menu cscope."
   ["Filters Options:"
    ("-s" "Limit results to current sub-directory" ("-s" "limit-to-subdir"))
+   ("-d" cscope-transient-read-directory)
    ("-i" cscope-transient-read-filter)
    ("-o" cscope-transient-read-filter-out)]
   ["Place holder"]
