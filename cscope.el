@@ -514,7 +514,7 @@ indicate the status of the search."
 	      (cscope-insert-match buffer
 				   (match-string 1) (match-string 2)
 				   (match-string 3) (match-string 4)))))
-	(unless (= (point) (point-max))
+	(unless (eobp)
 	  (forward-char))
 	(when (and (= (point) (line-beginning-position))
 		   (not (= (point) (line-end-position))))
