@@ -197,6 +197,7 @@ assumes there is a cscope make target."
 	      find-params cscope-params))))
 
 (defmacro with-cscope-buffer (&rest body)
+  "Execute BODY within cscope buffer linked to current directory."
   (declare (indent 0))
   `(with-current-buffer (cscope-find-buffer default-directory)
      (progn ,@body)))
