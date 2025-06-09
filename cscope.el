@@ -475,18 +475,19 @@ Highlights the search symbol in the context."
   (interactive)
   (let ((keys '((next-error-no-select . "next match")
 		(previous-error-no-select . "previous match")
-		(compilation-next-file . "next file")
-		(compilation-previous-file . "previous file")))
-	(previous-query '((cscope-previous-query . "previous cscope query")))
-	(next-query '((cscope-next-query . "next cscope query"))))
+		(compilation-next-file . "next file")))
+	(last-key '(compilation-previous-file . "previous file")))
     (when (cdr cscope-searches)
-      (setf keys (append keys previous-query)))
+      (setf keys (append keys (list last-key)))
+      (setf last-key '(cscope-previous-query . "previous cscope query")))
     (when cscope-searches-backup
-      (setf keys (append keys next-query)))
+      (setf keys (append keys (list last-key)))
+      (setf last-key '(cscope-next-query . "next cscope query")))
     (cl-flet ((format-key (key)
 		(format "\\[%s] for %s" (symbol-name (car key)) (cdr key))))
-      (message "Hit %s."
-	       (substitute-command-keys (mapconcat #'format-key keys ", "))))))
+      (message "Hit %s and %s."
+	       (substitute-command-keys (mapconcat #'format-key keys ", "))
+	       (substitute-command-keys (format-key last-key))))))
 
 (defun cscope-filter (process output)
   "Filter the output from the cscope process.
