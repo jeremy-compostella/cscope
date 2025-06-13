@@ -424,8 +424,6 @@ Highlights the search symbol in the context."
     (cl-incf cscope-num-matches-found)
     (when (= cscope-num-matches-found 1)
       (setq next-error-last-buffer buffer))
-    (when (= cscope-num-matches-found 2)
-      (display-buffer (current-buffer)))
     (when (and cscope-fontify-code-line
 	       (= cscope-num-matches-found
 		  cscope-highlight-and-font-line-limit))
@@ -454,7 +452,9 @@ Highlights the search symbol in the context."
 	  (save-excursion
 	    (forward-line -1)
 	    (unless (cscope-filter-match)
-	      (cl-decf cscope-num-matches-found))))))))
+	      (cl-decf cscope-num-matches-found))))))
+    (when (= cscope-num-matches-found 2)
+      (display-buffer (current-buffer)))))
 
 (defmacro for-all-cscope-match (&rest body)
   "Execute BODY for each cscope match in the current buffer."
