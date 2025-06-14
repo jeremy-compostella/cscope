@@ -144,6 +144,16 @@ If non-nil, prevents `cscope-filter' from automatically jumping
 to the first match when a cscope query returns a single result.
 This is useful when browsing and executing queries.")
 
+(defvar-local cscope-message-unique-match nil
+  "Determine if a message should be displayed for a unique match.
+
+When non-nil, it indicates if a unique match is found during a
+cscope search, and a message should be displayed instead of
+jumping directly to the match.
+
+This is typically used to notify to reduce the disturbance of
+windows change.")
+
 (defun cscope-start-process ()
   "Start the cscope process in line-oriented mode.
 Uses the database file 'cscope.out' in the current default directory.
@@ -303,6 +313,17 @@ to the new output chunk for correct parsing."
 			   (setq-local cscope-leftover nil)))))
     (insert leftover)))
 
+(defun cscope-move-prop (from to)
+  "Move text properties from FROM to TO within a buffer."
+  (let ((pos (point-min))
+	next)
+    (while (and (not (= pos (point-max)))
+		(setf next (or (next-property-change pos) (point-max))))
+      (when-let ((prop (get-text-property pos from)))
+	(put-text-property pos next to prop)
+	(put-text-property pos next from nil))
+      (setf pos next))))
+
 (defun cscope-fontify (file context)
   "Apply syntax highlighting to CONTEXT string."
   (if-let ((mode (cdr (cl-find file auto-mode-alist :key 'car
@@ -312,15 +333,7 @@ to the new output chunk for correct parsing."
 	(cl-letf (((symbol-function 'run-mode-hooks) #'ignore))
           (funcall mode))
 	(font-lock-ensure (point-min) (point-max))
-	(goto-char (point-min))
-	(let ((pos (point-min))
-	      next)
-	  (while (and (not (= pos (point-max)))
-		      (setf next (or (next-property-change pos) (point-max))))
-	    (when-let ((face (get-text-property pos 'face)))
-	      (put-text-property pos next 'face nil)
-	      (put-text-property pos next 'font-lock-face face))
-	    (setf pos next)))
+	(cscope-move-prop 'face 'font-lock-face)
 	(buffer-string))
     context))
 
@@ -491,6 +504,22 @@ Highlights the search symbol in the context."
 	       (substitute-command-keys (mapconcat #'format-key keys ", "))
 	       (substitute-command-keys (format-key last-key))))))
 
+(defun cscope-message-unique-match ()
+  "Display a message showing the unique match found.
+
+This function extracts the content of the first visible match in the
+cscope buffer, applies any syntax highlighting present, and displays
+the result as a message in the minibuffer.  It then resets the
+`cscope-message-unique-match' flag to nil."
+  (goto-char (cscope-first-error-position))
+  (let ((match (buffer-substring (line-beginning-position) (line-end-position))))
+    (message
+     (with-temp-buffer
+       (insert match)
+       (cscope-move-prop 'font-lock-face 'face)
+       (buffer-string))))
+  (setq cscope-message-unique-match nil))
+
 (defun cscope-filter (process output)
   "Filter the output from the cscope process.
 Parses the output from the cscope process, extracts file, function,
@@ -536,9 +565,11 @@ indicate the status of the search."
 	      (message "No match found for '%s'." (cdar cscope-searches))
 	    (if (and (not cscope-inhibit-automatic-open)
 		     (= cscope-num-matches-found 1))
-		(let ((next-error-found-function #'next-error-quit-window)
-		      (current-prefix-arg 0))
-		  (next-error))
+		(if cscope-message-unique-match
+		    (cscope-message-unique-match)
+		  (let ((next-error-found-function #'next-error-quit-window)
+			(current-prefix-arg 0))
+		    (next-error)))
 	      (select-window (get-buffer-window buffer))
 	      (goto-char (point-min))
 	      (forward-line 2)
@@ -678,6 +709,9 @@ Filters are applied based on the following:
 	(when-let ((filter-out (transient-arg-value "filter-out=" args)))
 	  (push-filter cscope-buffer (propertize filter-out
 						 'cscope-filter-out t)))
+	(when current-prefix-arg
+	  (with-current-buffer cscope-buffer
+	    (setq cscope-message-unique-match t)))
 	(when-let ((directory (or (transient-arg-value "limit-to-subdir=" args)
 				  (when (member "limit-to-subdir" args)
 				    (default-directory)))))
