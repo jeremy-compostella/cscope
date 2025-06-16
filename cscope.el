@@ -162,7 +162,9 @@ the process filter function."
   (setq cscope-process
 	(start-file-process "cscope" (current-buffer) "cscope" "-ld" "-f"
 			    "cscope.out"))
-  (set-process-filter cscope-process #'cscope-filter))
+  (let ((filter (apply-partially #'cscope-filter #'cscope-insert-match
+				 #'cscope-search-complete)))
+    (set-process-filter cscope-process filter)))
 
 (defun cscope-database-sentinel (progress timer process string)
   "Sentinel function for the cscope database generation process.
@@ -469,6 +471,37 @@ Highlights the search symbol in the context."
     (when (= cscope-num-matches-found 2)
       (display-buffer (current-buffer)))))
 
+(defun cscope-search-complete (buffer)
+  "Actions to perform after a cscope search completes.
+
+This function is called after the cscope process finishes and all
+output has been processed. It unlocks the cscope buffer, updates
+the mode line to reflect the search status (success or failure),
+displays a message if no matches were found, and navigates to the
+first match if appropriate."
+  (with-current-buffer buffer
+    (setq cscope-lock nil)
+    (let ((face (if (= cscope-num-matches-found 0)
+		    'compilation-mode-line-fail
+		  'compilation-mode-line-exit)))
+      (setq mode-line-process
+	    `((:propertize ":exit" face ,face)
+              compilation-mode-line-errors)))
+    (if (= cscope-num-matches-found 0)
+	(message "No match found for '%s'." (cdar cscope-searches))
+      (if (and (not cscope-inhibit-automatic-open)
+	       (= cscope-num-matches-found 1))
+	  (if cscope-message-unique-match
+	      (cscope-message-unique-match)
+	    (let ((next-error-found-function #'next-error-quit-window)
+		  (current-prefix-arg 0))
+	      (next-error)))
+	(select-window (get-buffer-window buffer))
+	(goto-char (point-min))
+	(forward-line 2)
+	(cscope-print-help))
+      (setq cscope-inhibit-automatic-open nil))))
+
 (defmacro for-all-cscope-match (&rest body)
   "Execute BODY for each cscope match in the current buffer."
   (declare (indent 0))
@@ -520,7 +553,7 @@ the result as a message in the minibuffer.  It then resets the
        (buffer-string))))
   (setq cscope-message-unique-match nil))
 
-(defun cscope-filter (process output)
+(defun cscope-filter (insert-fun complete-fun process output)
   "Filter the output from the cscope process.
 Parses the output from the cscope process, extracts file, function,
 line number, and context, and inserts the results into the cscope
@@ -543,9 +576,9 @@ indicate the status of the search."
 		  (function (match-string  2))
 		  (line (string-to-number (match-string 3)))
 		  (context (match-string 4)))
-	      (cscope-insert-match buffer
-				   (match-string 1) (match-string 2)
-				   (match-string 3) (match-string 4)))))
+	      (funcall insert-fun buffer
+		       (match-string 1) (match-string 2)
+		       (match-string 3) (match-string 4)))))
 	(unless (eobp)
 	  (forward-char))
 	(when (and (= (point) (line-beginning-position))
@@ -553,28 +586,7 @@ indicate the status of the search."
 	  (cscope-backup-incomplete-line buffer)))
       ;; End of data
       (when (re-search-forward "^>>" nil t)
-	(with-current-buffer buffer
-	  (setq cscope-lock nil)
-	  (let ((face (if (= cscope-num-matches-found 0)
-			  'compilation-mode-line-fail
-			'compilation-mode-line-exit)))
-	    (setq mode-line-process
-		  `((:propertize ":exit" face ,face)
-                    compilation-mode-line-errors)))
-	  (if (= cscope-num-matches-found 0)
-	      (message "No match found for '%s'." (cdar cscope-searches))
-	    (if (and (not cscope-inhibit-automatic-open)
-		     (= cscope-num-matches-found 1))
-		(if cscope-message-unique-match
-		    (cscope-message-unique-match)
-		  (let ((next-error-found-function #'next-error-quit-window)
-			(current-prefix-arg 0))
-		    (next-error)))
-	      (select-window (get-buffer-window buffer))
-	      (goto-char (point-min))
-	      (forward-line 2)
-	      (cscope-print-help))
-	    (setq cscope-inhibit-automatic-open nil)))))))
+	(funcall complete-fun buffer)))))
 
 (defun cscope-search-message (search)
   "Format a search query for display.
