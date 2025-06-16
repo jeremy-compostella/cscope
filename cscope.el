@@ -398,7 +398,7 @@ property, allowing the line to be unhidden later."
 
 Returns the regular expression used to hide the line, if the line has
 been marked as invisible by `cscope-hide-match'. Returns nil otherwise."
-    (get-text-property (line-beginning-position) 'invisible))
+  (get-text-property (line-beginning-position) 'invisible))
 
 (defun cscope-should-hide-match (regexp)
   "Return whether the current line should be hidden based on REGEXP.
