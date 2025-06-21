@@ -29,6 +29,7 @@
 (require 'cl-seq)
 (require 'grep)
 (require 'magit)
+(require 'tree-widget)
 (require 'uniquify)
 
 (defcustom cscope-show-function t
@@ -55,18 +56,19 @@ with large result sets."
   "List of file patterns to search for cscope database generation.")
 
 (defcustom cscope-search-types
-  '((0 "find-this-C-symbol" ",")
-    (1 "find-this-function-definition" ".")
-    (2 "find-functions-called-by-this-function" "c")
-    (3 "find-functions-calling-this-function" "C")
-    (4 "find-this-text-string" "s")
-    (5 "change-this-text-string" "S")
-    (6 "find-this-egrep-pattern" "e")
-    (7 "find-this-file" "f")
-    (8 "find-files-including-file" "i")
-    (9 "find-assignments-to-this-symbol" "a"))
-  "Alist mapping cscope search type numbers to their descriptive
-names and documentation."
+  '((0 "find-this-C-symbol" "," font-lock-function-name-face)
+    (1 "find-this-function-definition" "." font-lock-function-name-face)
+    (2 "find-functions-called-by-this-function" "c" font-lock-function-name-face t)
+    (3 "find-functions-calling-this-function" "C" font-lock-function-name-face t)
+    (4 "find-this-text-string" "s" font-lock-string-face)
+    (5 "change-this-text-string" "S" font-lock-string-face)
+    (6 "find-this-egrep-pattern" "e" font-lock-string-face)
+    (7 "find-this-file" "f" compilation-info)
+    (8 "find-files-including-file" "i" compilation-info)
+    (9 "find-assignments-to-this-symbol" "a" font-lock-function-name-face))
+  "Lists mapping cscope search type numbers to their descriptive
+names, a font to use to represent the search object, and an
+optional flag for tree mode view."
   :type 'alist)
 
 (defcustom cscope-display-options
@@ -90,22 +92,13 @@ When nil, filters are cleared each time a new query is executed,
 starting with a fresh, unfiltered result set."
   :type 'boolean)
 
-(defun cscope-symbol-title (symbol)
-  "Generate a user-friendly title from a symbol or symbol string.
+(defcustom cscope-tree-max-depth 3
+  "Maximum depth of the cscope tree to preload."
+  :type 'integer)
 
-This is used for displaying search types in menus and messages."
-  (with-temp-buffer
-    (save-excursion
-      (insert (if (symbolp symbol)
-		  (symbol-name symbol)
-		symbol)))
-    (save-excursion
-      (when (search-forward "cscope-" nil t)
-	(replace-match "")))
-    (capitalize-word 1)
-    (while (search-forward "-" nil t)
-      (replace-match " "))
-    (buffer-substring-no-properties (point-min) (point-max))))
+(defcustom cscope-highlight-face 'highlight
+  "Face used to highlight matching symbols in cscope results."
+  :type 'face)
 
 (defvar cscope-lock nil
   "A lock variable used to prevent concurrent cscope searches.
@@ -128,7 +121,10 @@ the current one completes.")
 
 (defvar-local cscope-searches nil
   "A list of previous searches performed in this buffer.
-Each element is a cons cell (type . symbol).")
+
+Each element is a (type . thing) cons cell where type is the
+index of the type of cscope search and thing is the string being
+looked for.")
 
 (defvar-local cscope-searches-backup nil)
 
@@ -154,17 +150,99 @@ jumping directly to the match.
 This is typically used to notify to reduce the disturbance of
 windows change.")
 
+(defvar-local cscope-tree-requests '()
+  "A list of pending requests for building the cscope call tree.
+
+Each element in this list represents a request to fetch and
+insert the children of a particular node in the cscope call tree.
+The format of each request is a list containing:
+
+- TYPE: The cscope search type (e.g., find functions called by).
+- THING: The symbol or string to search for (the function name).
+- PARENT: The tree widget representing the parent node (or nil
+  for the root).
+- DEPTH: The current depth of the tree being built.
+- MARKER: A buffer position marker.
+
+This variable is used in conjunction with `cscope-tree-insert-match'
+and `cscope-tree-search-complete' to manage the asynchronous
+population of the cscope call tree.")
+
+(defun cscope-symbol-title (symbol)
+  "Generate a user-friendly title from a symbol or symbol string.
+
+This is used for displaying search types in menus and messages."
+  (with-temp-buffer
+    (save-excursion
+      (insert (if (symbolp symbol)
+		  (symbol-name symbol)
+		symbol)))
+    (save-excursion
+      (when (search-forward "cscope-" nil t)
+	(replace-match "")))
+    (capitalize-word 1)
+    (while (search-forward "-" nil t)
+      (replace-match " "))
+    (buffer-substring-no-properties (point-min) (point-max))))
+
+(defun cscope-search-type ()
+  "Return the type, as a number, of the current cscope search."
+  (caar cscope-searches))
+
+(defun cscope-search-thing ()
+  "Return the 'thing' part of the current cscope search.
+
+The 'thing' is the symbol or string that was searched for."
+  (cdar cscope-searches))
+
+(defun cscope-search-thing-property ()
+  "Font-lock face associated with the current search type."
+  (caddr (assoc-default (cscope-search-type) cscope-search-types)))
+
+(defun cscope-search-propertized-thing ()
+  "Current search 'thing' propertized with the appropriate face."
+  (let ((face (cscope-search-thing-property)))
+    (propertize (cscope-search-thing) 'font-lock-face face)))
+
+(defun cscope-search-tree-p ()
+  "Whether the current cscope search should be displayed as a tree."
+  (cadddr (assoc-default (cscope-search-type) cscope-search-types)))
+
+(defun cscope-set-process-filter ()
+  "Set the cscope process filter based on the search type.
+
+If the current search is a tree-based search (e.g., call graph),
+the filter is set to use `cscope-tree-insert-match' and
+`cscope-tree-search-complete'.  Otherwise, it uses
+`cscope-insert-match' and `cscope-search-complete' for regular
+flat result display."
+  (let ((insert (if (cscope-search-tree-p)
+		    #'cscope-tree-insert-match
+		  #'cscope-insert-match))
+	(complete (if (cscope-search-tree-p)
+		      #'cscope-tree-search-complete
+		    #'cscope-search-complete)))
+    (set-process-filter cscope-process
+			(apply-partially #'cscope-filter insert complete))))
+
 (defun cscope-start-process ()
   "Start the cscope process in line-oriented mode.
 Uses the database file 'cscope.out' in the current default directory.
 Sets the `cscope-process' variable and assigns `cscope-filter' as
 the process filter function."
-  (setq cscope-process
-	(start-file-process "cscope" (current-buffer) "cscope" "-ld" "-f"
-			    "cscope.out"))
-  (let ((filter (apply-partially #'cscope-filter #'cscope-insert-match
-				 #'cscope-search-complete)))
-    (set-process-filter cscope-process filter)))
+  (cl-flet ((insert-match (file function line context) t)
+	    (complete ()
+	      (cscope-set-process-filter)
+	      (setq cscope-lock nil)))
+    (let ((filter (apply-partially #'cscope-filter #'insert-match #'complete)))
+      (setq cscope-lock t
+	    cscope-leftover nil)
+      (setq cscope-process
+	    (start-file-process "cscope" (current-buffer) "cscope" "-ld" "-f"
+				"cscope.out"))
+      (set-process-filter cscope-process filter)
+      (while cscope-lock
+	(sleep-for .1)))))
 
 (defun cscope-database-sentinel (progress timer process string)
   "Sentinel function for the cscope database generation process.
@@ -326,10 +404,25 @@ to the new output chunk for correct parsing."
 	(put-text-property pos next from nil))
       (setf pos next))))
 
+(defun cscope-get-file-mode (file)
+  "Determine the major mode for a file based on `auto-mode-alist'.
+
+Returns the mode specifier (a function symbol) or nil if no match
+is found."
+  (cl-flet ((match (x)
+	      (when (string-match (car x) file)
+		(cons (match-end 0) (cdr x)))))
+    (let ((matches (delq nil (mapcar #'match auto-mode-alist))))
+      (when matches
+	(let ((best (apply #'max (mapcar 'car matches))))
+	  (assoc-default best matches))))))
+
 (defun cscope-fontify (file context)
-  "Apply syntax highlighting to CONTEXT string."
-  (if-let ((mode (cdr (cl-find file auto-mode-alist :key 'car
-			       :test (lambda (x y) (string-match y x))))))
+  "Apply syntax highlighting to CONTEXT string.
+
+This function attempts to apply syntax highlighting to the given
+CONTEXT string based on the FILE type."
+  (if-let ((mode (cscope-get-file-mode file)))
       (with-temp-buffer
 	(insert context)
 	(cl-letf (((symbol-function 'run-mode-hooks) #'ignore))
@@ -338,6 +431,13 @@ to the new output chunk for correct parsing."
 	(cscope-move-prop 'face 'font-lock-face)
 	(buffer-string))
     context))
+
+(defun cscope-highlight-match-in-line (&optional thing)
+  (when cscope-highlight-match
+    (let ((thing (or thing (cscope-search-thing))))
+      (when (search-forward thing (line-end-position) t)
+	(let ((ol (make-overlay (match-beginning 0) (match-end 0))))
+	  (overlay-put ol 'face cscope-highlight-face))))))
 
 (defun cscope-insert-rendered-context (file context)
   "Renders CONTEXT with optional fontification and highlighting.
@@ -350,11 +450,7 @@ on customizable variables."
     (setf context (cscope-fontify file context)))
   (save-excursion
     (insert context))
-  (when cscope-highlight-match
-    (let ((thing (cdar cscope-searches)))
-      (while (search-forward thing (line-end-position) t)
-	(let ((ol (make-overlay (match-beginning 0) (match-end 0))))
-	  (overlay-put ol 'face 'highlight)))))
+  (cscope-highlight-match-in-line)
   (goto-char (line-end-position)))
 
 (defun cscope-hide-match (regexp)
@@ -367,7 +463,7 @@ property, allowing the line to be unhidden later."
         (end (line-end-position))
         (inhibit-read-only t))
     (put-text-property begin end 'invisible regexp)
-    (remove-overlays begin end 'face 'highlight)))
+    (remove-overlays begin end 'face cscope-highlight-match)))
 
 (defun cscope-show-match ()
   "Show the current match in the cscope buffer."
@@ -428,103 +524,19 @@ because it doesn't match the inclusion pattern)."
     (cscope-show-match)
     t))
 
-(defun cscope-insert-match (buffer file function line context)
-  "Insert a cscope search result into BUFFER.
-
-The result is formatted as 'file:line: context\\n'.
-Increments `cscope-num-matches-found'.
-If this is the second match found, displays the buffer.
-Highlights the search symbol in the context."
-  (with-current-buffer buffer
-    (cl-incf cscope-num-matches-found)
-    (when (= cscope-num-matches-found 1)
-      (setq next-error-last-buffer buffer))
-    (when (and cscope-fontify-code-line
-	       (= cscope-num-matches-found
-		  cscope-highlight-and-font-line-limit))
-      (message "Fontification limit reached, disabling fontification."))
-    (let* ((inhibit-read-only t)
-	   (below-limit (< cscope-num-matches-found
-			   cscope-highlight-and-font-line-limit))
-	   (cscope-fontify-code-line (and below-limit
-					  cscope-fontify-code-line))
-	   (cscope-highlight-match (and below-limit
-					cscope-highlight-match)))
-      (save-excursion
-        (goto-char (point-max))
-	(let ((fun (if (or (string= function "<global>")
-			   (string= function "<unknown>")
-			   (string= function (cdar cscope-searches)))
-		       ""
-		     (propertize
-		      (concat (propertize function 'face nil
-					  'font-lock-face
-					  'font-lock-function-name-face)
-			      ":")
-		      'cscope-function t
-		      'invisible (not cscope-show-function)))))
-          (insert (format "%s:%s:%s%s\n" file line fun context))
-	  (save-excursion
-	    (forward-line -1)
-	    (unless (cscope-filter-match)
-	      (cl-decf cscope-num-matches-found))))))
-    (when (= cscope-num-matches-found 2)
-      (display-buffer (current-buffer)))))
-
-(defun cscope-search-complete (buffer)
-  "Actions to perform after a cscope search completes.
-
-This function is called after the cscope process finishes and all
-output has been processed. It unlocks the cscope buffer, updates
-the mode line to reflect the search status (success or failure),
-displays a message if no matches were found, and navigates to the
-first match if appropriate."
-  (with-current-buffer buffer
-    (setq cscope-lock nil)
-    (let ((face (if (= cscope-num-matches-found 0)
-		    'compilation-mode-line-fail
-		  'compilation-mode-line-exit)))
-      (setq mode-line-process
-	    `((:propertize ":exit" face ,face)
-              compilation-mode-line-errors)))
-    (if (= cscope-num-matches-found 0)
-	(message "No match found for '%s'." (cdar cscope-searches))
-      (if (and (not cscope-inhibit-automatic-open)
-	       (= cscope-num-matches-found 1))
-	  (if cscope-message-unique-match
-	      (cscope-message-unique-match)
-	    (let ((next-error-found-function #'next-error-quit-window)
-		  (current-prefix-arg 0))
-	      (next-error)))
-	(select-window (get-buffer-window buffer))
-	(goto-char (point-min))
-	(forward-line 2)
-	(cscope-print-help))
-      (setq cscope-inhibit-automatic-open nil))))
-
-(defmacro for-all-cscope-match (&rest body)
-  "Execute BODY for each cscope match in the current buffer."
-  (declare (indent 0))
-  `(with-cscope-buffer
-     (save-excursion
-       (goto-char (point-min))
-       (forward-line 2)
-       (while (not (eobp))
-	 (progn ,@body)
-	 (forward-line)))))
-
-(defun cscope-is-busy ()
-  "Check if the current buffer cscope process is running and locked."
-  (when-let ((process (get-buffer-process (current-buffer))))
-    (and (eq (process-status process) 'run) cscope-lock)))
-
 (defun cscope-print-help ()
   "Display helpful keybindings in the minibuffer."
   (interactive)
-  (let ((keys '((next-error-no-select . "next match")
-		(previous-error-no-select . "previous match")
+  (let ((keys '((cscope-next-match . "next match")
+		(cscope-previous-match . "previous match")
+		(next-error-no-select . "opening next match")
+		(previous-error-no-select . "opening previous match")
 		(compilation-next-file . "next file")))
 	(last-key '(compilation-previous-file . "previous file")))
+    (when (cscope-search-tree-p)
+      (setf keys (append '((cscope-tree-toggle . "(un)fold tree node")
+			   (cscope-tree-up . "parent"))
+			 keys)))
     (when (cdr cscope-searches)
       (setf keys (append keys (list last-key)))
       (setf last-key '(cscope-previous-query . "previous cscope query")))
@@ -536,6 +548,104 @@ first match if appropriate."
       (message "Hit %s and %s."
 	       (substitute-command-keys (mapconcat #'format-key keys ", "))
 	       (substitute-command-keys (format-key last-key))))))
+
+(defun cscope-display-buffer ()
+  (let* ((buffer (current-buffer))
+	 (window (get-buffer-window buffer)))
+    (unless (equal (frame-selected-window) window)
+      (if window
+	  (select-window window)
+	(select-window (display-buffer buffer)))
+      (goto-char (cscope-first-error-position))
+      (cscope-print-help))))
+
+(defun cscope-insert-match (file function line context)
+  "Insert a cscope search result into BUFFER.
+
+The result is formatted as 'file:line: context\\n'.
+Increments `cscope-num-matches-found'.
+If this is the second match found, displays the buffer.
+Highlights the search symbol in the context."
+  (cl-incf cscope-num-matches-found)
+  (when (= cscope-num-matches-found 1)
+    (setq next-error-last-buffer (current-buffer)))
+  (when (and cscope-fontify-code-line
+	     (= cscope-num-matches-found
+		cscope-highlight-and-font-line-limit))
+    (message "Fontification limit reached, disabling fontification."))
+  (let* ((inhibit-read-only t)
+	 (below-limit (< cscope-num-matches-found
+			 cscope-highlight-and-font-line-limit))
+	 (cscope-fontify-code-line (and below-limit
+					cscope-fontify-code-line))
+	 (cscope-highlight-match-in-line (and below-limit
+					      cscope-highlight-match)))
+    (save-excursion
+      (goto-char (point-max))
+      (let ((fun (if (or (string= function "<global>")
+			 (string= function "<unknown>")
+			 (string= function (cscope-search-thing)))
+		     ""
+		   (propertize
+		    (concat (propertize function 'face nil
+					'font-lock-face
+					'font-lock-function-name-face)
+			    ":")
+		    'cscope-function t
+		    'invisible (not cscope-show-function)))))
+        (insert (format "%s:%s:%s%s\n" file line fun context))
+	(save-excursion
+	  (forward-line -1)
+	  (unless (cscope-filter-match)
+	    (cl-decf cscope-num-matches-found))))))
+  (when (= cscope-num-matches-found 2)
+    (cscope-display-buffer)))
+
+(defun cscope-search-mark-complete ()
+  (let ((face (if (= cscope-num-matches-found 0)
+		  'compilation-mode-line-fail
+		'compilation-mode-line-exit)))
+    (setq mode-line-process
+	  `((:propertize ":exit" face ,face) compilation-mode-line-errors)
+	  cscope-inhibit-automatic-open nil
+	  cscope-lock nil)))
+
+(defun cscope-search-complete ()
+  "Actions to perform after a cscope search completes.
+
+This function is called after the cscope process finishes and all
+output has been processed. It unlocks the cscope buffer, updates
+the mode line to reflect the search status (success or failure),
+displays a message if no matches were found, and navigates to the
+first match if appropriate."
+  (if (= cscope-num-matches-found 0)
+      (message "No match found for '%s'." (cscope-search-thing))
+    (if (and (not cscope-inhibit-automatic-open)
+	     (= cscope-num-matches-found 1)
+	     (not (cscope-search-tree-p)))
+	(if cscope-message-unique-match
+	    (cscope-message-unique-match)
+	  (let ((next-error-found-function #'next-error-quit-window)
+		(current-prefix-arg 0))
+	    (next-error)))
+      (cscope-display-buffer)))
+  (cscope-search-mark-complete))
+
+(defmacro for-all-cscope-match (&rest body)
+  "Execute BODY for each cscope match in the current buffer."
+  (declare (indent 0))
+  `(with-cscope-buffer
+     (save-excursion
+       (goto-char (cscope-first-error-position))
+       (forward-line 2)
+       (while (not (eobp))
+	 (progn ,@body)
+	 (forward-line)))))
+
+(defun cscope-is-busy ()
+  "Check if the current buffer cscope process is running and locked."
+  (when-let ((process (get-buffer-process (current-buffer))))
+    (and (eq (process-status process) 'run) cscope-lock)))
 
 (defun cscope-message-unique-match ()
   "Display a message showing the unique match found.
@@ -576,26 +686,19 @@ indicate the status of the search."
 		  (function (match-string  2))
 		  (line (string-to-number (match-string 3)))
 		  (context (match-string 4)))
-	      (funcall insert-fun buffer
-		       (match-string 1) (match-string 2)
-		       (match-string 3) (match-string 4)))))
+	      (with-current-buffer buffer
+		(funcall insert-fun file function line context)))))
 	(unless (eobp)
 	  (forward-char))
 	(when (and (= (point) (line-beginning-position))
 		   (not (= (point) (line-end-position))))
 	  (cscope-backup-incomplete-line buffer)))
       ;; End of data
+      (goto-char (point-max))
+      (forward-line -1)
       (when (re-search-forward "^>>" nil t)
-	(funcall complete-fun buffer)))))
-
-(defun cscope-search-message (search)
-  "Format a search query for display.
-Takes a SEARCH query, which is a cons cell (type . symbol), and
-generates a human-readable string describing the search."
-  (format "%s: '%s'."
-	  (cscope-symbol-title
-	   (car (assoc-default (car search) cscope-search-types)))
-	  (cdr search)))
+	(with-current-buffer buffer
+	  (funcall complete-fun))))))
 
 (defun cscope-print-filters ()
   "Display the active filters in the cscope buffer's header line."
@@ -613,6 +716,136 @@ generates a human-readable string describing the search."
 			  (mapconcat #'filter-string
 				     cscope-filters ", "))))))))
 
+(defun cscope-search (type thing)
+  (cscope-set-process-filter)
+  (process-send-string cscope-process (format "%d%s\n" type thing)))
+
+(defun cscope-tree-tag (function &optional file line context)
+  (cl-flet ((propertize-function (function)
+	      (propertize function 'font-lock-face
+			  (cscope-search-thing-property))))
+    (let* ((location (when (and file line)
+		       (format "%s:%s:" file line)))
+	   (function (unless (member function '("<global>" "<unknown>"))
+		       (propertize function 'font-lock-face
+				   (cscope-search-thing-property))))
+	   (prefix (if (and file context (= (cscope-search-type) 2))
+		       (cscope-fontify file context)
+		     function))
+	   (tag (mapconcat #'identity (delq nil (list prefix location))  " ")))
+      (propertize tag 'cscope-thing (if (= (cscope-search-type) 8)
+					(file-name-nondirectory file)
+				      function)))))
+
+(defun cscope-tree-widget (type function file line context insert)
+  "Create a tree widget for a cscope match."
+  (if insert
+      (save-excursion
+	(goto-char (point-max))
+	(let (node)
+	  (save-excursion
+	    (setf node (widget-create 'tree-widget
+				      :tag (cscope-tree-tag function file line context)
+				      :help-echo nil)))
+	  (cscope-highlight-match-in-line (cscope-tree-thing node))
+	  node))
+    (widget-convert 'tree-widget
+                    :tag (cscope-tree-tag function file line context)
+		    :help-echo nil)))
+
+(defun cscope-tree-should-hide-match (file function line context)
+  "Check if the current match should be hidden based on filters."
+  (let ((filters cscope-filters))
+    (with-temp-buffer
+      (save-excursion
+	(insert (format "%s:%s:%s %s\n" file line function context)))
+      (delq nil (mapcar #'cscope-should-hide-match filters)))))
+
+(defun cscope-tree-thing (node)
+  (get-text-property 0 'cscope-thing (widget-get node :tag)))
+
+(defun cscope-tree-insert-match (file function line context)
+  (when cscope-tree-requests
+    (unless (cscope-tree-should-hide-match file function line context)
+      (cl-multiple-value-bind (type parent widget depth) (car cscope-tree-requests)
+	(let* ((child (cscope-tree-widget type function file line context
+					  (not widget)))
+	       (childs (when widget
+			 (widget-get widget :args))))
+	  (cl-incf cscope-num-matches-found)
+	  (when widget
+	    (widget-put widget :args (append childs (list child))))
+	  (when (< depth cscope-tree-max-depth)
+	    (let ((request (list type (cscope-tree-thing child)
+				 child (1+ depth))))
+	      (setq cscope-tree-requests (append cscope-tree-requests
+						 (list request))))))))))
+
+(defun cscope-tree-build-childs (node)
+  (interactive)
+  (let* ((thing (cscope-tree-thing node))
+	 (request (list (list (cscope-search-type) thing node
+			      cscope-tree-max-depth (point-marker)))))
+    (if (not cscope-tree-requests)
+	(setq cscope-tree-requests request)
+      (setcdr request (cdr cscope-tree-requests))
+      (setcdr cscope-tree-requests request))
+    (unless (cdr cscope-tree-requests)
+      (cscope-tree-execute-request))))
+
+(defun cscope-tree-execute-request ()
+  (let ((request (car cscope-tree-requests)))
+    (unless (process-live-p cscope-process)
+      (cscope-start-process))
+    (setq mode-line-process
+	  '((:propertize ":run" face compilation-mode-line-run)
+            compilation-mode-line-errors))
+    (process-send-string cscope-process
+			 (format "%d%s\n" (nth 0 request) (nth 1 request)))))
+
+(defun cscope-tree-widget-after-toggle (node)
+  (save-excursion
+    (dolist (child (widget-get node :children))
+      (goto-char (widget-get child :from))
+      (let ((inhibit-read-only t))
+	(compilation--parse-region (line-beginning-position)
+				   (1+ (line-end-position))))
+      (cscope-highlight-match-in-line (cscope-tree-thing child))
+      (cscope-tree-widget-after-toggle child))))
+
+(defun cscope-tree-search-complete ()
+  (let ((request (car cscope-tree-requests)))
+    (when-let ((marker (nth 4 request)))
+      (save-excursion
+	(goto-char marker)
+	(when-let ((node (widget-get (get-char-property (point) 'button) :parent)))
+	  (when (widget-get node :args)
+	    (widget-value-set node (widget-value node))
+	    (widget-button-press (point))))))
+    (setq cscope-tree-requests (cdr cscope-tree-requests))
+    (if cscope-tree-requests
+	(cscope-tree-execute-request)
+      (cscope-search-mark-complete)
+      (if (= cscope-num-matches-found 0)
+	  (message "No match found for '%s'." (cscope-search-thing))
+	(cscope-display-buffer)))))
+
+(defun cscope-tree-search (process type thing)
+  (let* ((tag (cscope-search-propertized-thing)))
+    (cscope-set-process-filter)
+    (setq cscope-tree-requests (list (list type thing nil 1)))
+    (cscope-tree-execute-request)))
+
+(defun cscope-prepare-buffer ()
+  (let ((inhibit-read-only t))
+    (erase-buffer)
+    (insert (format "%s: '%s'.\n\n"
+		    (cscope-symbol-title
+		     (car (assoc-default (cscope-search-type)
+					 cscope-search-types)))
+		    (cscope-search-propertized-thing)))
+    (cscope-print-filters)))
+
 (defun cscope-execute-query ()
   "Execute the most recent cscope query from `cscope-searches'.
 
@@ -624,25 +857,24 @@ details. If the cscope process is not running or the database
 file 'cscope.out' is absent, it attempts to start the process or
 generate the database, respectively."
   (interactive)
-  (if (cscope-is-busy)
-      (message "A cscope search is in progress; retry later.")
-    (let ((search (car cscope-searches)))
-      (let ((inhibit-read-only t))
-	(erase-buffer)
-	(insert (cscope-search-message search) "\n\n"))
-      (setq mode-line-process
-	    '((:propertize ":run" face compilation-mode-line-run)
-              compilation-mode-line-errors)
-	    cscope-num-matches-found 0)
-      (unless (and cscope-process (process-live-p cscope-process))
-	(if (file-readable-p "cscope.out")
-	    (cscope-start-process)
-	  (cscope-generate-database)))
-      (when (and cscope-process (process-live-p cscope-process))
-	(cscope-print-filters)
-	(setq cscope-lock t)
-	(process-send-string cscope-process (format "%d%s\n" (car search)
-						    (cdr search)))))))
+  (when (cscope-is-busy)
+    (cscope-kill-compilation))
+  (cscope-prepare-buffer)
+  (setq mode-line-process
+	'((:propertize ":run" face compilation-mode-line-run)
+          compilation-mode-line-errors)
+	cscope-num-matches-found 0)
+  (unless (and cscope-process (process-live-p cscope-process))
+    (if (file-readable-p "cscope.out")
+	(cscope-start-process)
+      (cscope-generate-database)))
+  (when (and cscope-process (process-live-p cscope-process))
+    (setq cscope-lock t)
+    (let ((type (cscope-search-type))
+	  (thing (cscope-search-thing)))
+      (if (cscope-search-tree-p)
+	  (cscope-tree-search cscope-process type thing)
+	(cscope-search type thing)))))
 
 (defun cscope-point-within-code-context ()
   "Test if the current point is in a code line context."
@@ -660,9 +892,11 @@ generate the database, respectively."
 			(buffer-substring-no-properties (region-beginning)
 							(region-end)))
 		       ((eq major-mode 'cscope-mode)
-			(if (cscope-point-within-code-context)
-			    (thing-at-point 'symbol)
-			  (cdar cscope-searches)))
+			(cond ((cscope-search-tree-p)
+			       (thing-at-point 'symbol))
+			      ((cscope-point-within-code-context)
+			       (thing-at-point 'symbol))
+			      ((cscope-search-thing))))
 		       ((thing-at-point 'symbol)))))
     (read-string prompt initial 'cscope-history)))
 
@@ -695,51 +929,49 @@ Filters are applied based on the following:
   (cl-flet ((push-filter (buffer regexp)
 	      (with-current-buffer buffer
 		(add-to-list 'cscope-filters regexp t))))
-    (if (cscope-is-busy)
-	(message "A cscope search is in progress; retry later.")
-      (setf type (cond ((not type)
-			(completing-read
-			 "Type: " (mapcar 'cadr cscope-search-types) nil t))
-		       ((numberp type)
-			(car (assoc-default type cscope-search-types)))
-		       (type)))
-      (unless thing
-	(setf thing
-	      (cscope-read-string (concat (cscope-symbol-title type) ": "))))
-      (when (stringp type)
-	(setf type (car (cl-find type cscope-search-types
-				 :key #'cadr :test #'string=))))
-      (let ((cscope-buffer (cscope-find-buffer default-directory))
-	    (args (transient-args 'cscope-entry)))
-	(unless cscope-persistent-filters
-	  (with-current-buffer cscope-buffer
-	    (setq cscope-filters '())))
-	(when (eq cscope-buffer (current-buffer))
-	  (setq cscope-inhibit-automatic-open t))
-	(when-let ((filter-in (transient-arg-value "filter-in=" args)))
-	  (push-filter cscope-buffer filter-in))
-	(when-let ((filter-out (transient-arg-value "filter-out=" args)))
-	  (push-filter cscope-buffer (propertize filter-out
-						 'cscope-filter-out t)))
-	(when current-prefix-arg
-	  (with-current-buffer cscope-buffer
-	    (setq cscope-message-unique-match t)))
-	(when-let ((directory (or (transient-arg-value "limit-to-subdir=" args)
-				  (when (member "limit-to-subdir" args)
-				    (default-directory)))))
-	  (setf directory (expand-file-name directory))
-	  (let* ((cscope-directory (with-current-buffer cscope-buffer
-				     default-directory))
-		 (length (length cscope-directory)))
-	    (when (string-prefix-p cscope-directory directory)
-	      (push-filter cscope-buffer
-			   (concat "^" (substring directory (1+ length)))))))
+    (setf type (cond ((not type)
+		      (completing-read
+		       "Type: " (mapcar 'cadr cscope-search-types) nil t))
+		     ((numberp type)
+		      (car (assoc-default type cscope-search-types)))
+		     (type)))
+    (unless thing
+      (setf thing
+	    (cscope-read-string (concat (cscope-symbol-title type) ": "))))
+    (when (stringp type)
+      (setf type (car (cl-find type cscope-search-types
+			       :key #'cadr :test #'string=))))
+    (let ((cscope-buffer (cscope-find-buffer default-directory))
+	  (args (transient-args 'cscope-entry)))
+      (unless cscope-persistent-filters
 	(with-current-buffer cscope-buffer
-	  (let ((search (cons type thing)))
-	    (setq cscope-searches (delete search cscope-searches)
-		  cscope-searches (push search cscope-searches)
-		  cscope-searches-backup (delete search cscope-searches-backup))
-	    (cscope-execute-query)))))))
+	  (setq cscope-filters '())))
+      (when (eq cscope-buffer (current-buffer))
+	(setq cscope-inhibit-automatic-open t))
+      (when-let ((filter-in (transient-arg-value "filter-in=" args)))
+	(push-filter cscope-buffer filter-in))
+      (when-let ((filter-out (transient-arg-value "filter-out=" args)))
+	(push-filter cscope-buffer (propertize filter-out
+					       'cscope-filter-out t)))
+      (when current-prefix-arg
+	(with-current-buffer cscope-buffer
+	  (setq cscope-message-unique-match t)))
+      (when-let ((directory (or (transient-arg-value "limit-to-subdir=" args)
+				(when (member "limit-to-subdir" args)
+				  (default-directory)))))
+	(setf directory (expand-file-name directory))
+	(let* ((cscope-directory (with-current-buffer cscope-buffer
+				   default-directory))
+	       (length (length cscope-directory)))
+	  (when (string-prefix-p cscope-directory directory)
+	    (push-filter cscope-buffer
+			 (concat "^" (substring directory (1+ length)))))))
+      (with-current-buffer cscope-buffer
+	(let ((search (cons type thing)))
+	  (setq cscope-searches (delete search cscope-searches)
+		cscope-searches (push search cscope-searches)
+		cscope-searches-backup (delete search cscope-searches-backup))
+	  (cscope-execute-query))))))
 
 (defun cscope-re-execute-query ()
   "Re-execute the most recent cscope query.
@@ -750,11 +982,9 @@ re-initiate the query using the same search type as the most
 recent one in `cscope-searches` but asks for a pattern to search
 for."
   (interactive)
-  (if (cscope-is-busy)
-      (message "A cscope search is in progress; retry later.")
     (if (equal current-prefix-arg '(4))
 	(cscope-query (caar cscope-searches))
-      (cscope-execute-query))))
+      (cscope-execute-query)))
 
 (defun cscope-previous-query (&optional n)
   "Execute a previous cscope query from the history.
@@ -768,27 +998,27 @@ The history is maintained in `cscope-searches' and
 `cscope-searches-backup'.  Queries are moved between these lists
 to navigate the history."
   (interactive)
-  (if (cscope-is-busy)
-      (message "A cscope search is in progress; retry later.")
-    (let* ((i 0)
-	   (n (or n 1)))
-      (let ((in (if (< n 0) 'cscope-searches-backup 'cscope-searches))
-	    (out (if (< n 0) 'cscope-searches 'cscope-searches-backup)))
-	(while (and (< i (abs n))
-		    (symbol-value in)
-		    (or (eq in 'cscope-searches-backup)
-			(cdr cscope-searches)))
-	  (set out (push (car (symbol-value in)) (symbol-value out)))
-	  (set in (cdr (symbol-value in)))
-	  (cl-incf i)))
-      (if (= i (abs n))
-	  (progn
-	    (setq cscope-inhibit-automatic-open t)
-	    (unless cscope-persistent-filters
-	      (setq cscope-filters '()))
-	    (cscope-execute-query))
-	(message (format "%s of search history."
-			 (if (< n 0) "End" "Beginning")))))))
+  (when (cscope-is-busy)
+    (cscope-kill-compilation))
+  (let* ((i 0)
+	 (n (or n 1)))
+    (let ((in (if (< n 0) 'cscope-searches-backup 'cscope-searches))
+	  (out (if (< n 0) 'cscope-searches 'cscope-searches-backup)))
+      (while (and (< i (abs n))
+		  (symbol-value in)
+		  (or (eq in 'cscope-searches-backup)
+		      (cdr cscope-searches)))
+	(set out (push (car (symbol-value in)) (symbol-value out)))
+	(set in (cdr (symbol-value in)))
+	(cl-incf i)))
+    (if (= i (abs n))
+	(progn
+	  (setq cscope-inhibit-automatic-open t)
+	  (unless cscope-persistent-filters
+	    (setq cscope-filters '()))
+	  (cscope-execute-query))
+      (message (format "%s of search history."
+		       (if (< n 0) "End" "Beginning"))))))
 
 (defun cscope-next-query (&optional n)
   "Execute a subsequent cscope query from the history (undoing previous).
@@ -816,7 +1046,7 @@ Emacs commands."
       (fset (intern function-name)
             (lambda ()
               (interactive)
-              (cscope-query (cadr feature) nil))))))
+              (cscope-query (cadr feature)))))))
 
 (defun cscope-match-loc ()
   "Return the compilation--loc structure of the current match."
@@ -848,8 +1078,8 @@ updating the display."
 			       cscope-highlight-and-font-line-limit))
 	       (cscope-fontify-code-line (and below-limit
 					      cscope-fontify-code-line))
-	       (cscope-highlight-match (and below-limit
-					    cscope-highlight-match)))
+	       (cscope-highlight-match-in-line (and below-limit
+						    cscope-highlight-match)))
           (unless below-limit
             (unless progress
 	      (setf progress (make-progress-reporter "Refreshing cscope buffer"
@@ -857,8 +1087,8 @@ updating the display."
             (progress-reporter-update progress (line-number-at-pos)))
           (when (cscope-filter-match)
             (cl-incf cscope-num-matches-found)))))
-    (when progress
-      (progress-reporter-done progress))))
+      (when progress
+	(progress-reporter-done progress))))
 
 (defun cscope-generate-toggle-functions ()
   "Create interactive toggle functions from `cscope-display-options'.
@@ -1081,7 +1311,9 @@ which buffer to refer to for displaying the error."
 (defun cscope-filter-matches ()
   "Refreshes the cscope buffer, reapplying filters and highlighting."
   (cscope-print-filters)
-  (cscope-refresh))
+  (if (cscope-search-tree-p)
+      (cscope-execute-query)
+    (cscope-refresh)))
 
 (defun cscope-pop-filter ()
   "Remove the most recently applied filter from the cscope buffer.
@@ -1134,9 +1366,64 @@ of those that don't.  The buffer is modified in place."
 		     (substitute-command-keys " filter applied, pop filters\
  using the \\[cscope-pop-filter] key.")))))
 
+;; TODO: Override tree-widget-button-click
+
+(defun cscope-tree-toggle ()
+  (interactive)
+  (save-excursion
+    (goto-char (line-beginning-position))
+    (while (and (not (get-char-property (point) 'button))
+		(not (= (point) (line-end-position))))
+      (forward-char))
+    (when (get-char-property (point) 'button)
+      (let ((node (widget-get (get-char-property (point) 'button) :parent)))
+	(if (not (widget-get node :args))
+	    (cscope-tree-build-childs node)
+	  (widget-button-press (point)))))))
+
+(defun cscope-previous-match ()
+  "Move to the previous cscope match."
+  (interactive)
+  (if (cscope-search-tree-p)
+      (widget-backward 1)
+    (compilation-previous-error 1)))
+
+(defun cscope-next-match ()
+  "Move to the next cscope match."
+  (interactive)
+  (when (< (line-beginning-position) (cscope-last-error-position))
+    (if (cscope-search-tree-p)
+	(widget-forward 1)
+      (compilation-next-error 1))))
+
+(defun cscope-kill-compilation ()
+  "Stop the running cscope process and clear related state."
+  (interactive)
+  (when-let ((process (get-buffer-process (current-buffer))))
+    (set-process-filter process nil)
+    (interrupt-process process)
+    (setq cscope-lock nil
+	  cscope-tree-requests nil)
+    ;; Wait for process to die
+    (while (process-live-p process)
+      (sleep-for .1))))
+
+(defun cscope-tree-up ()
+  (interactive)
+  (goto-char (line-beginning-position))
+  (while (and (not (get-char-property (point) 'button))
+	      (not (= (point) (line-end-position))))
+    (forward-char))
+  (when-let* ((node (widget-get (get-char-property (point) 'button) :parent))
+	      (parent (widget-get node :parent)))
+    (goto-char (widget-get parent :from))))
+
 (defvar cscope-mode-map (cl-copy-list grep-mode-map))
 (define-key cscope-mode-map (kbd "<return>") #'cscope-goto-match)
+(define-key cscope-mode-map (kbd "<tab>") #'cscope-next-match)
+(define-key cscope-mode-map (kbd "S-<tab>") #'cscope-previous-match)
 (define-key cscope-mode-map (kbd "C-o") nil)
+(define-key cscope-mode-map (kbd "C-c C-k") #'cscope-kill-compilation)
 (define-key cscope-mode-map (kbd "e") #'cscope-entry)
 (define-key cscope-mode-map (kbd "f") #'cscope-filter-lines)
 (define-key cscope-mode-map (kbd "F") #'cscope-pop-filter)
@@ -1151,6 +1438,8 @@ of those that don't.  The buffer is modified in place."
 (define-key cscope-mode-map (kbd "t") #'cscope-toggle)
 (define-key cscope-mode-map (kbd "N") #'cscope-next-query)
 (define-key cscope-mode-map (kbd "P") #'cscope-previous-query)
+(define-key cscope-mode-map (kbd "u") #'cscope-tree-up)
+(define-key cscope-mode-map (kbd "x") #'cscope-tree-toggle)
 
 (defun cscope-first-error-position ()
   "Return the position of the first visible cscope match in the buffer.
@@ -1222,10 +1511,14 @@ results. The mode line displays the number of matches found."
 			   face ,grep-hit-face
 			   help-echo "Number of matches so far")
 		     " " ,@(cscope-generate-toggle-mode-line) "]")))
-    (setq-local compilation-error-regexp-alist grep-regexp-alist
-		compilation-error-face grep-hit-face
-		compilation-mode-line-errors mode-line
-		next-error-function #'cscope-next-error-function)
+    (let* ((regexp-alist (copy-list grep-regexp-alist)))
+      (setf (caar regexp-alist)
+	    "\\(?:\\(?1:[a-zA-Z0-9_<>/\.\-]+\\):\\(?2:[0-9]+\\)\\)")
+      (setq-local compilation-error-regexp-alist regexp-alist
+		  compilation-error-face grep-hit-face
+		  compilation-mode-line-errors mode-line
+		  next-error-function #'cscope-next-error-function
+		  tree-widget-after-toggle-functions '(cscope-tree-widget-after-toggle)))
     (cscope--init)))
 
 ;; Make sure function and menu are initialized on load
