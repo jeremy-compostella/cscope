@@ -998,8 +998,6 @@ The history is maintained in `cscope-searches' and
 `cscope-searches-backup'.  Queries are moved between these lists
 to navigate the history."
   (interactive)
-  (when (cscope-is-busy)
-    (cscope-kill-compilation))
   (let* ((i 0)
 	 (n (or n 1)))
     (let ((in (if (< n 0) 'cscope-searches-backup 'cscope-searches))
@@ -1399,14 +1397,16 @@ of those that don't.  The buffer is modified in place."
 (defun cscope-kill-compilation ()
   "Stop the running cscope process and clear related state."
   (interactive)
-  (when-let ((process (get-buffer-process (current-buffer))))
-    (set-process-filter process nil)
-    (interrupt-process process)
-    (setq cscope-lock nil
-	  cscope-tree-requests nil)
-    ;; Wait for process to die
-    (while (process-live-p process)
-      (sleep-for .1))))
+  (let ((buffer (current-buffer)))
+    (while (process-live-p (get-buffer-process buffer))
+      (when-let ((process (get-buffer-process buffer)))
+	(set-process-filter process #'ignore)
+	(set-process-sentinel process #'ignore)
+	(interrupt-process process)
+	(setq cscope-lock nil
+	      cscope-tree-requests nil))))
+  (let ((inhibit-read-only t))
+    (erase-buffer)))
 
 (defun cscope-tree-up ()
   (interactive)
