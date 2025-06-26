@@ -1,6 +1,10 @@
 This Emacs package provides a client interface for [[http://cscope.sourceforge.net/][cscope]], a developer's tool for browsing C/C++ source code. It allows users to perform various cscope queries directly within Emacs and view the results in a dedicated buffer with features for easy navigation. This package integrates smoothly by adhering to the traditional Emacs principle of a compilation or grep buffer.
 
+*Figure 1.* cscope displays function call tree of =fsp_silicon_init= of the coreboot project.
 [[call-tree-screenshot.png]]
+
+*Figure 2.* cscope-eldoc display definition of the symbol at point in the echo area.
+[[eldoc-screenshot.png]]
 ** Features
 - *Multiple Search Types:* Supports all standard cscope search types (find symbol, definition, callers, callees, text, egrep pattern, file, including files, assignments).
 - *Result Navigation:* Provides a dedicated =cscope-mode= for displaying search results, allowing easy navigation with =next-error= and =previous-error= (bound to =n= and =p= by default, inherited from =grep-mode=). You can also use =M-n= and =M-p= to navigate results without jumping to the file.
@@ -11,6 +15,7 @@ This Emacs package provides a client interface for [[http://cscope.sourceforge.n
 - *Filtering:* Provides functions to dynamically filter results using regular expressions.
 - *Display Options:* Offers display options such as code font locking, highlighting of the search pattern, and hiding or displaying the parent function. These are configurable through the transient toggle menu accessible via the =t= key.
 - *Call tree*: Display the function call tree in an expandable tree widget. Pressing the =x= key on a node will expand it to show its children.
+- *Eldoc*: Provides context-sensitive documentation in the minibuffer via Eldoc.
 ** Installation and Configuration
 1. Ensure =cscope.el= is available in your =load-path=.
 2. Add the following to your Emacs initialization file (=.emacs=, =init.el=, etc.):
@@ -26,6 +31,7 @@ This Emacs package provides a client interface for [[http://cscope.sourceforge.n
 #+end_src
 4. [@4] Customize general options. Here are a few examples:
    #+begin_src emacs-lisp
+     (cscope-eldoc-mode) ;; Enable cscope eldoc support
      (setq next-error-recenter '(4)          ; Center the target buffer automatically.
            cscope-show-function nil          ; Do not show the parent function.
            cscope-highlight-face 'underline) ; Use 'underline instead of the default

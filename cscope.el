@@ -27,6 +27,7 @@
 (require 'cl)
 (require 'cl-lib)
 (require 'cl-seq)
+(require 'eldoc)
 (require 'grep)
 (require 'magit)
 (require 'tree-widget)
@@ -99,6 +100,10 @@ starting with a fresh, unfiltered result set."
 (defcustom cscope-highlight-face 'highlight
   "Face used to highlight matching symbols in cscope results."
   :type 'face)
+
+(defcustom cscope-eldoc-supported-modes '(c-mode cscope-mode)
+  "List of major modes where `cscope-eldoc-mode' is active."
+  :type '(repeat symbol))
 
 (defvar cscope-lock nil
   "A lock variable used to prevent concurrent cscope searches.
@@ -346,6 +351,9 @@ prefixed with 'cscope:'."
       (cscope-mode)
       (current-buffer))))
 
+(defun cscope-database-exist ()
+  (file-readable-p "cscope.out"))
+
 (defun cscope-top-level (dir)
   "Determine the top-level directory for cscope operations for DIR."
   (cond ((magit-toplevel))
@@ -353,7 +361,7 @@ prefixed with 'cscope:'."
 	       (current dir))
 	   (while (and current (not top-level))
 	     (let ((default-directory current))
-	       (when (file-readable-p "cscope.out")
+	       (when (cscope-database-exist)
 		 (setf top-level current)))
 	     (setf current (file-name-parent-directory current)))
 	   top-level))
@@ -417,7 +425,7 @@ is found."
 	(let ((best (apply #'max (mapcar 'car matches))))
 	  (assoc-default best matches))))))
 
-(defun cscope-fontify (file context)
+(defun cscope-fontify (file context &optional do-not-move-face)
   "Apply syntax highlighting to CONTEXT string.
 
 This function attempts to apply syntax highlighting to the given
@@ -428,7 +436,8 @@ CONTEXT string based on the FILE type."
 	(cl-letf (((symbol-function 'run-mode-hooks) #'ignore))
           (funcall mode))
 	(font-lock-ensure (point-min) (point-max))
-	(cscope-move-prop 'face 'font-lock-face)
+	(unless do-not-move-face
+	  (cscope-move-prop 'face 'font-lock-face))
 	(buffer-string))
     context))
 
@@ -642,10 +651,13 @@ first match if appropriate."
 	 (progn ,@body)
 	 (forward-line)))))
 
-(defun cscope-is-busy ()
-  "Check if the current buffer cscope process is running and locked."
+(defun cscope-alive-p ()
   (when-let ((process (get-buffer-process (current-buffer))))
-    (and (eq (process-status process) 'run) cscope-lock)))
+    (eq (process-status process) 'run)))
+
+(defun cscope-busy-p ()
+  "Check if the current buffer cscope process is running and locked."
+  (and (cscope-alive-p) cscope-lock))
 
 (defun cscope-message-unique-match ()
   "Display a message showing the unique match found.
@@ -716,9 +728,12 @@ indicate the status of the search."
 			  (mapconcat #'filter-string
 				     cscope-filters ", "))))))))
 
+(defun cscope-process-send-request (type thing)
+  (process-send-string cscope-process (format "%d%s\n" type thing)))
+
 (defun cscope-search (type thing)
   (cscope-set-process-filter)
-  (process-send-string cscope-process (format "%d%s\n" type thing)))
+  (cscope-process-send-request type thing))
 
 (defun cscope-tree-tag (function &optional file line context)
   (cl-flet ((propertize-function (function)
@@ -800,8 +815,7 @@ indicate the status of the search."
     (setq mode-line-process
 	  '((:propertize ":run" face compilation-mode-line-run)
             compilation-mode-line-errors))
-    (process-send-string cscope-process
-			 (format "%d%s\n" (nth 0 request) (nth 1 request)))))
+    (cscope-process-send-request (nth 0 request) (nth 1 request))))
 
 (defun cscope-tree-widget-after-toggle (node)
   (save-excursion
@@ -857,7 +871,7 @@ details. If the cscope process is not running or the database
 file 'cscope.out' is absent, it attempts to start the process or
 generate the database, respectively."
   (interactive)
-  (when (cscope-is-busy)
+  (when (cscope-busy-p)
     (cscope-kill-compilation))
   (cscope-prepare-buffer)
   (setq mode-line-process
@@ -865,7 +879,7 @@ generate the database, respectively."
           compilation-mode-line-errors)
 	cscope-num-matches-found 0)
   (unless (and cscope-process (process-live-p cscope-process))
-    (if (file-readable-p "cscope.out")
+    (if (cscope-database-exist)
 	(cscope-start-process)
       (cscope-generate-database)))
   (when (and cscope-process (process-live-p cscope-process))
@@ -1192,6 +1206,108 @@ This provides a convenient way to dismiss cscope result windows."
     (when-let ((window (get-buffer-window buffer)))
       (with-selected-window window
 	(quit-window)))))
+
+(defun cscope-eldoc-add-hook ()
+  "Add `cscope-eldoc' to `eldoc-documentation-functions'.
+
+This function is intended to be used as a hook in major modes
+where `cscope-eldoc-mode' should be active.  It adds
+`cscope-eldoc' to the `eldoc-documentation-functions' hook,
+enabling cscope-based documentation in the minibuffer via eldoc.
+The addition is done buffer-locally (LOCAL is t), so it only
+affects the current buffer."
+  (add-hook 'eldoc-documentation-functions #'cscope-eldoc nil t))
+
+(define-minor-mode cscope-eldoc-mode
+  "Toggle cscope integration with Eldoc.
+
+When enabled, Cscope provides context-sensitive documentation
+in the minibuffer via Eldoc.  This integration is active only in
+major modes listed in `cscope-eldoc-supported-modes`. It leverages
+the `eldoc-documentation-functions' hook to provide information
+based on Cscope search results.
+
+The mode is globally enabled, but the actual integration is
+buffer-local and mode-specific.  It adds or removes
+`cscope-eldoc' from `eldoc-documentation-functions' based on the
+minor mode's state."
+  :init-value nil
+  :global t
+  (cl-flet ((action (var hook local)
+	      (if cscope-eldoc-mode
+		  (add-hook var hook nil local)
+		(remove-hook var hook local))))
+    (dolist (buffer (buffer-list))
+      (with-current-buffer buffer
+	(when (memq major-mode cscope-eldoc-supported-modes)
+	  (action 'eldoc-documentation-functions #'cscope-eldoc t))))
+    (dolist (mode cscope-eldoc-supported-modes)
+      (let* ((hook-name (concat (symbol-name mode) "-hook"))
+	     (hook (intern hook-name)))
+	(action hook #'cscope-eldoc-add-hook nil)))))
+
+(defvar-local cscope-eldoc-callback nil
+  "Callback function for `cscope-eldoc' to display documentation.")
+
+(defun cscope-eldoc-insert-match (file function line context)
+  "Insert a cscope search result for Eldoc, applying fontification.
+
+This function is used as the `insert-fun' in `cscope-filter' when
+Eldoc is active."
+  (when cscope-eldoc-callback
+    (unless (cscope-tree-should-hide-match file function line context)
+      (funcall cscope-eldoc-callback (cscope-fontify file context t))
+      (setq cscope-eldoc-callback nil))))
+
+(defun cscope-eldoc-search-complete ()
+  "Signal completion of a cscope search initiated by `cscope-eldoc'.
+
+This function is specifically designed for Eldoc integration."
+  (setq cscope-lock nil))
+
+(defun cscope-eldoc-thing-at-point ()
+  "Get the symbol at point for Eldoc.
+
+It checks if the symbol already has a `face' text property to
+ignore types, language keywords, or function declarations. This
+prevents Eldoc from processing undesired symbols."
+  (when-let ((symbol (thing-at-point 'symbol)))
+    (unless (get-text-property 0 'face symbol)
+      symbol)))
+
+(defun cscope-eldoc (callback &rest _ignored)
+  "Provide context-sensitive definition in the minibuffer via Eldoc.
+
+This function is invoked by Eldoc to provide documentation for the
+symbol at point. It initiates a cscope search to find the symbol's
+definition and displays it in the minibuffer.
+
+CALLBACK is a function to call with the documentation string when
+the cscope search completes.
+
+The function first checks if there is a valid symbol at point using
+`cscope-eldoc-thing-at-point' and finds or creates a cscope buffer
+associated with the current directory using `cscope-find-buffer'.
+
+If a cscope process isn't running for that buffer and the
+database already exist, it starts one. It then initiates a cscope
+search for the symbol at point, using the `cscope-filter' with
+`cscope-eldoc-insert-match' and `cscope-eldoc-search-complete' to
+handle the search results and completion."
+  (when-let* ((thing (cscope-eldoc-thing-at-point))
+	      (buffer (cscope-find-buffer default-directory)))
+    (with-current-buffer buffer
+      (unless (process-live-p cscope-process)
+	(when (cscope-database-exist)
+	  (cscope-start-process)))
+      (when (and (cscope-alive-p) (not (cscope-busy-p)))
+	(setq cscope-lock t)
+	(setq cscope-eldoc-callback callback)
+	(set-process-filter cscope-process
+			    (apply-partially #'cscope-filter
+					     #'cscope-eldoc-insert-match
+					     #'cscope-eldoc-search-complete))
+	(cscope-process-send-request 1 thing)))))
 
 (transient-define-argument cscope-transient-read-directory ()
   :description "Limit matches to a specific directory"
