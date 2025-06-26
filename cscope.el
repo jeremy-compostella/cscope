@@ -1367,6 +1367,7 @@ of those that don't.  The buffer is modified in place."
 ;; TODO: Override tree-widget-button-click
 
 (defun cscope-tree-toggle ()
+  "Toggle the expansion state of a cscope tree node at point."
   (interactive)
   (save-excursion
     (goto-char (line-beginning-position))
