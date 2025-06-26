@@ -27,6 +27,7 @@
 (require 'cl)
 (require 'cl-lib)
 (require 'cl-seq)
+(require 'eldoc)
 (require 'grep)
 (require 'magit)
 (require 'tree-widget)
@@ -359,7 +360,7 @@ prefixed with 'cscope:'."
 	   top-level))
 	(dir)))
 
-(defun cscope-find-buffer (dir)
+(defun cscope-find-buffer (dir &optional create)
   "Find or create a cscope buffer for the given directory DIR.
 Returns an existing `cscope-mode' buffer if its `default-directory'
 is a prefix of DIR. Otherwise, creates a new `cscope-mode' buffer
@@ -370,7 +371,7 @@ with its `default-directory' set to the project's top-level directory
                       (with-current-buffer b default-directory))
                :test (lambda (x y)
 		       (string-prefix-p (expand-file-name y) x)))
-      (cscope-new-buffer (cscope-top-level dir))))
+      (and create (cscope-new-buffer (cscope-top-level dir)))))
 
 (defun cscope-backup-incomplete-line (buffer)
   "Store the content of the current line in BUFFER's `cscope-leftover'.
@@ -417,7 +418,7 @@ is found."
 	(let ((best (apply #'max (mapcar 'car matches))))
 	  (assoc-default best matches))))))
 
-(defun cscope-fontify (file context)
+(defun cscope-fontify (file context &optional dontmoveface)
   "Apply syntax highlighting to CONTEXT string.
 
 This function attempts to apply syntax highlighting to the given
@@ -428,7 +429,8 @@ CONTEXT string based on the FILE type."
 	(cl-letf (((symbol-function 'run-mode-hooks) #'ignore))
           (funcall mode))
 	(font-lock-ensure (point-min) (point-max))
-	(cscope-move-prop 'face 'font-lock-face)
+	(unless dontmoveface
+	  (cscope-move-prop 'face 'font-lock-face))
 	(buffer-string))
     context))
 
@@ -642,10 +644,13 @@ first match if appropriate."
 	 (progn ,@body)
 	 (forward-line)))))
 
-(defun cscope-is-busy ()
-  "Check if the current buffer cscope process is running and locked."
+(defun cscope-alive-p ()
   (when-let ((process (get-buffer-process (current-buffer))))
-    (and (eq (process-status process) 'run) cscope-lock)))
+    (eq (process-status process) 'run)))
+
+(defun cscope-busy-p ()
+  "Check if the current buffer cscope process is running and locked."
+  (and (cscope-alive-p) cscope-lock))
 
 (defun cscope-message-unique-match ()
   "Display a message showing the unique match found.
@@ -857,7 +862,7 @@ details. If the cscope process is not running or the database
 file 'cscope.out' is absent, it attempts to start the process or
 generate the database, respectively."
   (interactive)
-  (when (cscope-is-busy)
+  (when (cscope-busy-p)
     (cscope-kill-compilation))
   (cscope-prepare-buffer)
   (setq mode-line-process
@@ -941,7 +946,7 @@ Filters are applied based on the following:
     (when (stringp type)
       (setf type (car (cl-find type cscope-search-types
 			       :key #'cadr :test #'string=))))
-    (let ((cscope-buffer (cscope-find-buffer default-directory))
+    (let ((cscope-buffer (cscope-find-buffer default-directory t))
 	  (args (transient-args 'cscope-entry)))
       (unless cscope-persistent-filters
 	(with-current-buffer cscope-buffer
@@ -1192,6 +1197,53 @@ This provides a convenient way to dismiss cscope result windows."
     (when-let ((window (get-buffer-window buffer)))
       (with-selected-window window
 	(quit-window)))))
+
+(defcustom cscope-eldoc nil
+  "Enable cscope integration with eldoc mode.
+
+When non-nil, cscope will be used to provide documentation in the
+minibuffer via eldoc mode.")
+
+(defvar-local cscope-eldoc-num-matches-found 0)
+(defvar-local cscope-eldoc-callback nil)
+(defvar-local cscope-eldoc-thing nil)
+
+(defun cscope-eldoc-insert-match (file function line context)
+  (when (= cscope-eldoc-num-matches-found 0)
+    (unless (cscope-tree-should-hide-match file function line context)
+      (cl-incf cscope-eldoc-num-matches-found)
+      (funcall cscope-eldoc-callback (cscope-fontify file context t)))))
+
+(defun cscope-eldoc-search-complete ()
+  (cscope-search-mark-complete))
+
+(defun cscope-eldoc-thing-at-point ()
+  (when-let ((symbol (thing-at-point 'symbol)))
+    (unless (get-text-property 0 'face symbol)
+      symbol)))
+
+(defun cscope-eldoc (callback &rest _ignored)
+  (when cscope-eldoc
+    (when-let* ((thing (cscope-eldoc-thing-at-point))
+		(buffer (cscope-find-buffer default-directory)))
+      (with-current-buffer buffer
+	(when (and (cscope-alive-p) (not (cscope-busy-p)))
+	  (setq cscope-lock t)
+	  (setq cscope-eldoc-num-matches-found 0
+		cscope-eldoc-callback callback
+		cscope-eldoc-thing thing)
+	  (set-process-filter cscope-process
+			      (apply-partially #'cscope-filter
+					       #'cscope-eldoc-insert-match
+					       #'cscope-eldoc-search-complete))
+	  (process-send-string cscope-process
+			       (format "%d%s\n" 1 thing)))))))
+
+(defun cscope-eldoc-c-mode-hook ()
+  (add-hook 'eldoc-documentation-functions #'cscope-eldoc))
+
+(eval-after-load 'c-mode
+  '(add-hook 'c-mode-hook #'cscope-eldoc-c-mode-hook))
 
 (transient-define-argument cscope-transient-read-directory ()
   :description "Limit matches to a specific directory"

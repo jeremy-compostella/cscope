@@ -28,6 +28,7 @@ This Emacs package provides a client interface for [[http://cscope.sourceforge.n
    #+begin_src emacs-lisp
      (setq next-error-recenter '(4)          ; Center the target buffer automatically.
            cscope-show-function nil          ; Do not show the parent function.
+           cscope-eldoc t                    ; Enable cscope for eldoc
            cscope-highlight-face 'underline) ; Use 'underline instead of the default
                                              ; 'highlight face
    #+end_src
