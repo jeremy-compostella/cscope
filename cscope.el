@@ -1273,7 +1273,8 @@ ignore types, language keywords, or function declarations. This
 prevents Eldoc from processing undesired symbols."
   (when-let ((symbol (thing-at-point 'symbol)))
     (unless (get-text-property 0 'face symbol)
-      symbol)))
+      (when (= (string-match "[a-zA-Z0-9-_]+" symbol) 0)
+	symbol))))
 
 (defun cscope-eldoc (callback &rest _ignored)
   "Provide context-sensitive definition in the minibuffer via Eldoc.
