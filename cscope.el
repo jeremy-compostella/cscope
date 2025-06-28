@@ -812,9 +812,12 @@ indicate the status of the search."
   (let ((request (car cscope-tree-requests)))
     (unless (process-live-p cscope-process)
       (cscope-start-process))
-    (setq mode-line-process
-	  '((:propertize ":run" face compilation-mode-line-run)
-            compilation-mode-line-errors))
+    (unless cscope-lock
+      (setq cscope-lock t)
+      (setq mode-line-process
+	    '((:propertize ":run" face compilation-mode-line-run)
+              compilation-mode-line-errors))
+      (cscope-set-process-filter))
     (cscope-process-send-request (nth 0 request) (nth 1 request))))
 
 (defun cscope-tree-widget-after-toggle (node)
@@ -846,7 +849,6 @@ indicate the status of the search."
 
 (defun cscope-tree-search (process type thing)
   (let* ((tag (cscope-search-propertized-thing)))
-    (cscope-set-process-filter)
     (setq cscope-tree-requests (list (list type thing nil 1)))
     (cscope-tree-execute-request)))
 
