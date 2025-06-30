@@ -732,6 +732,7 @@ indicate the status of the search."
   (process-send-string cscope-process (format "%d%s\n" type thing)))
 
 (defun cscope-search (type thing)
+  (setq cscope-lock t)
   (cscope-set-process-filter)
   (cscope-process-send-request type thing))
 
@@ -885,7 +886,6 @@ generate the database, respectively."
 	(cscope-start-process)
       (cscope-generate-database)))
   (when (and cscope-process (process-live-p cscope-process))
-    (setq cscope-lock t)
     (let ((type (cscope-search-type))
 	  (thing (cscope-search-thing)))
       (if (cscope-search-tree-p)
