@@ -1631,7 +1631,7 @@ results. The mode line displays the number of matches found."
 			   face ,grep-hit-face
 			   help-echo "Number of matches so far")
 		     " " ,@(cscope-generate-toggle-mode-line) "]")))
-    (let* ((regexp-alist (copy-list grep-regexp-alist)))
+    (let* ((regexp-alist (copy-tree grep-regexp-alist)))
       (setf (caar regexp-alist)
 	    "\\(?:\\(?1:[a-zA-Z0-9_<>/\.\-]+\\):\\(?2:[0-9]+\\)\\)")
       (setq-local compilation-error-regexp-alist regexp-alist
