@@ -903,6 +903,15 @@ generate the database, respectively."
 	   (when (re-search-forward ":[0-9]+:" nil t)
 	     (>= current (match-end 0)))))))
 
+(defun cscope-thing-at-point ()
+  "Get the thing at point, stripping potential C pointer/reference
+decorations."
+  (when-let ((thing (thing-at-point 'symbol)))
+    (when (= (string-match "-?[&\*>]?\\([a-zA-Z0-9-_]+\\)" thing) 0)
+      (let ((face (get-text-property 0 'face thing)))
+	(unless (eq face 'font-lock-keyword-face)
+	  (substring thing (match-beginning 1) (match-end 1)))))))
+
 (defun cscope-read-string (prompt)
   "Read a string from the minibuffer, adding it to `cscope-history'."
   (let ((initial (cond ((use-region-p)
@@ -910,11 +919,11 @@ generate the database, respectively."
 							(region-end)))
 		       ((eq major-mode 'cscope-mode)
 			(cond ((cscope-search-tree-p)
-			       (thing-at-point 'symbol))
+			       (cscope-thing-at-point))
 			      ((cscope-point-within-code-context)
-			       (thing-at-point 'symbol))
+			       (cscope-thing-at-point))
 			      ((cscope-search-thing))))
-		       ((thing-at-point 'symbol)))))
+		       ((cscope-thing-at-point)))))
     (read-string prompt initial 'cscope-history)))
 
 (defun cscope-query (&optional type thing)
@@ -1287,10 +1296,10 @@ This function is specifically designed for Eldoc integration."
 It checks if the symbol already has a `face' text property to
 ignore types, language keywords, or function declarations. This
 prevents Eldoc from processing undesired symbols."
-  (when-let ((symbol (thing-at-point 'symbol)))
-    (unless (get-text-property 0 'face symbol)
-      (when (= (string-match "[a-zA-Z0-9-_]+" symbol) 0)
-	symbol))))
+  (when-let ((thing (cscope-thing-at-point)))
+    (let ((face (get-text-property 0 'face thing)))
+      (when (or (not face) (eq face 'font-lock-function-name-face))
+	thing))))
 
 (defun cscope-eldoc (callback &rest _ignored)
   "Provide context-sensitive definition in the minibuffer via Eldoc.
