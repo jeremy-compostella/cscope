@@ -272,6 +272,7 @@ STRING is the output from the process."
     (if (not (string= string "finished\n"))
 	(error "Database generation failed, check %s buffer for details"
 	       (buffer-name))
+      (setq cscope-eldoc-cache nil)
       (cscope-start-process)
       (when cscope-searches
 	(cscope-execute-query)))))
@@ -1248,18 +1249,31 @@ minor mode's state."
 	     (hook (intern hook-name)))
 	(action hook #'cscope-eldoc-add-hook nil)))))
 
-(defvar-local cscope-eldoc-callback nil
-  "Callback function for `cscope-eldoc' to display documentation.")
+(defvar-local cscope-eldoc-search '()
+  "Holds the current cscope search request for `cscope-eldoc'.
+
+This variable stores information about the ongoing cscope search initiated
+by `cscope-eldoc`.  It's a cons cell of the form (THING . CALLBACK), where:
+
+- THING: The symbol or string being searched for.
+- CALLBACK: A function to call with the search result (fontified code context)
+            when the cscope search completes successfully.")
+
+(defvar-local cscope-eldoc-cache '()
+  "Cache for cscope-eldoc results to improve performance.")
 
 (defun cscope-eldoc-insert-match (file function line context)
   "Insert a cscope search result for Eldoc, applying fontification.
 
 This function is used as the `insert-fun' in `cscope-filter' when
 Eldoc is active."
-  (when cscope-eldoc-callback
+  (when cscope-eldoc-search
     (unless (cscope-tree-should-hide-match file function line context)
-      (funcall cscope-eldoc-callback (cscope-fontify file context t))
-      (setq cscope-eldoc-callback nil))))
+      (let ((result (cscope-fontify file context t)))
+	(funcall (cdr cscope-eldoc-search) result)
+	(add-to-list 'cscope-eldoc-cache
+		     (cons (car cscope-eldoc-search) result)))
+      (setq cscope-eldoc-search nil))))
 
 (defun cscope-eldoc-search-complete ()
   "Signal completion of a cscope search initiated by `cscope-eldoc'.
@@ -1300,17 +1314,19 @@ handle the search results and completion."
   (when-let* ((thing (cscope-eldoc-thing-at-point))
 	      (buffer (cscope-find-buffer default-directory)))
     (with-current-buffer buffer
-      (unless (process-live-p cscope-process)
-	(when (cscope-database-exist)
-	  (cscope-start-process)))
-      (when (and (cscope-alive-p) (not (cscope-busy-p)))
-	(setq cscope-lock t)
-	(setq cscope-eldoc-callback callback)
-	(set-process-filter cscope-process
-			    (apply-partially #'cscope-filter
-					     #'cscope-eldoc-insert-match
-					     #'cscope-eldoc-search-complete))
-	(cscope-process-send-request 1 thing)))))
+      (if-let ((cache (assoc-default thing cscope-eldoc-cache)))
+	  (funcall callback cache)
+	(unless (process-live-p cscope-process)
+	  (when (cscope-database-exist)
+	    (cscope-start-process)))
+	(when (and (cscope-alive-p) (not (cscope-busy-p)))
+	  (setq cscope-lock t)
+	  (setq cscope-eldoc-search (cons thing callback))
+	  (set-process-filter cscope-process
+			      (apply-partially #'cscope-filter
+					       #'cscope-eldoc-insert-match
+					       #'cscope-eldoc-search-complete))
+	  (cscope-process-send-request 1 thing))))))
 
 (transient-define-argument cscope-transient-read-directory ()
   :description "Limit matches to a specific directory"
