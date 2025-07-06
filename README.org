@@ -97,8 +97,10 @@ Actions limited to the cscope buffer:
 - =g=: Re-execute the current query.
 - =P= or =N=: Execute the previous or next search in the cscope buffer history.
 - =t=: Open the display options menu (refer to the /Control Display/ section).
-- =u=: Navigate up the call tree (if a tree search).
-- =x=: Toggle (un)fold the tree node (if a tree search).
+In a tree search:
+- =u=: Navigate to current node parent.
+- =x=: Toggle (un)fold the tree node.
+- =c=: Copy the call trace of the current node, represented as a string, into the kill ring.
 
 Actions on the matching result and corresponding buffers or windows:
 

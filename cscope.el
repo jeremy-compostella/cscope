@@ -105,6 +105,17 @@ starting with a fresh, unfiltered result set."
   "List of major modes where `cscope-eldoc-mode' is active."
   :type '(repeat symbol))
 
+(defcustom cscope-tree-format-call-tree #'cscope-tree-format-call-default
+  "Function to format the cscope call tree trace.
+
+This custom variable allows you to specify a function that
+determines how the call trace is formatted when copied to the
+kill-ring using `cscope-tree-kill-call-trace'. The function
+should accept a list of function names (strings) representing the
+call trace and return a single string representing the formatted
+trace."
+  :type 'function)
+
 (defvar cscope-lock nil
   "A lock variable used to prevent concurrent cscope searches.
 
@@ -1553,15 +1564,47 @@ of those that don't.  The buffer is modified in place."
   (let ((inhibit-read-only t))
     (erase-buffer)))
 
+(defun cscope-tree-get-node ()
+  "Get the tree node at point, navigating to the button if necessary."
+  (save-excursion
+    (unless (get-char-property (point) 'button)
+      (goto-char (line-beginning-position))
+      (while (and (not (get-char-property (point) 'button))
+		  (not (= (point) (line-end-position))))
+	(forward-char)))
+    (widget-get (get-char-property (point) 'button) :parent)))
+
 (defun cscope-tree-up ()
+  "Navigate to the parent node in the cscope tree."
   (interactive)
-  (goto-char (line-beginning-position))
-  (while (and (not (get-char-property (point) 'button))
-	      (not (= (point) (line-end-position))))
-    (forward-char))
-  (when-let* ((node (widget-get (get-char-property (point) 'button) :parent))
+  (when-let* ((node (cscope-tree-get-node))
 	      (parent (widget-get node :parent)))
     (goto-char (widget-get parent :from))))
+
+(defun cscope-tree-format-call-default (fun-list)
+  "Default formatting function for cscope call traces. "
+  (mapconcat (lambda (fun) (format "%s()" fun)) fun-list " -> "))
+
+(defun cscope-tree-kill-call-trace ()
+  "Copy the call trace of the current node to the kill-ring.
+
+It format the call trace into a string using the function
+specified by `cscope-tree-format-call-tree' and copies the
+resulting string to the kill-ring."
+  (interactive)
+  (save-excursion
+    (when-let* ((node (cscope-tree-get-node))
+		(trace (list (cscope-tree-thing node))))
+      (while (cscope-tree-up)
+	(push (cscope-tree-thing (cscope-tree-get-node)) trace))
+      (push (cscope-search-thing) trace)
+      (when (= (cscope-search-type) 3)
+	(setf trace (nreverse trace)))
+      (let* ((res (funcall cscope-tree-format-call-tree trace)))
+	(kill-new res)
+	(message "%s copied to kill-ring."
+		 (propertize (concat "\"" res "\"") 'face
+			     font-lock-string-face))))))
 
 (defvar cscope-mode-map (cl-copy-list grep-mode-map))
 (define-key cscope-mode-map (kbd "<return>") #'cscope-goto-match)
@@ -1569,6 +1612,7 @@ of those that don't.  The buffer is modified in place."
 (define-key cscope-mode-map (kbd "S-<tab>") #'cscope-previous-match)
 (define-key cscope-mode-map (kbd "C-o") nil)
 (define-key cscope-mode-map (kbd "C-c C-k") #'cscope-kill-compilation)
+(define-key cscope-mode-map (kbd "c") #'cscope-tree-kill-call-trace)
 (define-key cscope-mode-map (kbd "e") #'cscope-entry)
 (define-key cscope-mode-map (kbd "f") #'cscope-filter-lines)
 (define-key cscope-mode-map (kbd "F") #'cscope-pop-filter)
