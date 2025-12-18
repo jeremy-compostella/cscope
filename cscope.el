@@ -918,10 +918,11 @@ generate the database, respectively."
   "Get the thing at point, stripping potential C pointer/reference
 decorations."
   (when-let ((thing (thing-at-point 'symbol)))
-    (when (= (string-match "-?[&\*>]?\\([a-zA-Z0-9-_]+\\)" thing) 0)
-      (let ((face (get-text-property 0 'face thing)))
-	(unless (eq face 'font-lock-keyword-face)
-	  (substring thing (match-beginning 1) (match-end 1)))))))
+    (when-let ((index (string-match "-?[&\*>]?\\([a-zA-Z0-9-_\.]+\\)" thing)))
+      (when (= index 0)
+	(let ((face (get-text-property 0 'face thing)))
+	  (unless (eq face 'font-lock-keyword-face)
+	    (substring thing (match-beginning 1) (match-end 1))))))))
 
 (defun cscope-read-string (prompt)
   "Read a string from the minibuffer, adding it to `cscope-history'."
